@@ -1,10 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import FulfillmentView from "./fulfillment-view.jsx";
+import App from "./App.jsx";
 
-// TODO: replace with tab shell once etsy-dashboard.jsx is ready
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
-    <FulfillmentView />
+    <App />
   </React.StrictMode>
 );
