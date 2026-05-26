@@ -7,5 +7,6 @@ NEW_VER=$(node "$ROOT/scripts/bump-version.cjs")
 git add \
   "$ROOT/package.json" \
   "$ROOT/src-tauri/Cargo.toml" \
-  "$ROOT/src-tauri/tauri.conf.json"
+  "$ROOT/src-tauri/tauri.conf.json" \
+  "$ROOT/README.md"
 echo "version → $NEW_VER"

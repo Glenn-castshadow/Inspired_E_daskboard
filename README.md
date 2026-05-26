@@ -2,7 +2,8 @@
 
 Internal Tauri desktop app for managing orders across all 3 Etsy shops. Replaces manual order tracking with a unified fulfillment queue and analytics view.
 
-**Platform:** Windows 11 only · Single operator · Not a public app
+**Platform:** Windows 11 only · Single operator · Not a public app  
+**Current version:** v0.1.5
 
 ---
 
@@ -164,3 +165,16 @@ await invoke("clear_cache")
 // Or bypass cache for a single call
 await invoke("get_orders", { shopIds: [...], forceRefresh: true })
 ```
+
+---
+
+## Version history
+
+| Version | Date |
+|---|---|
+| v0.1.5 | 2026-05-26 |
+| v0.1.4 | 2026-05-26 |
+| v0.1.3 | 2026-05-26 |
+| v0.1.2 | 2026-05-26 |
+| v0.1.1 | 2026-05-26 |
+| v0.1.0 | 2026-05-26 |

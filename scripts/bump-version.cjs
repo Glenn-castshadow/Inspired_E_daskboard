@@ -30,4 +30,24 @@ const tauri     = JSON.parse(fs.readFileSync(tauriPath, "utf8"));
 tauri.package.version = next;
 fs.writeFileSync(tauriPath, JSON.stringify(tauri, null, 2) + "\n");
 
+// ── README.md ─────────────────────────────────────────────────────────────────
+const readmePath = path.join(root, "README.md");
+let readme = fs.readFileSync(readmePath, "utf8");
+
+const today = new Date().toISOString().slice(0, 10);
+
+// Update the "Current version:" badge line
+readme = readme.replace(
+  /\*\*Current version:\*\* v[\d.]+/,
+  `**Current version:** v${next}`
+);
+
+// Prepend new row to the version history table (after the |---|---| separator)
+readme = readme.replace(
+  /(## Version history[\s\S]*?\|---\|---\|\n)/,
+  `$1| v${next} | ${today} |\n`
+);
+
+fs.writeFileSync(readmePath, readme);
+
 process.stdout.write(`v${next}\n`);
