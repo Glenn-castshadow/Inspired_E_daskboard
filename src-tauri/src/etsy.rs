@@ -606,7 +606,7 @@ pub async fn get_orders(
     }
 
     all_orders.sort_by(|a, b| {
-        a.shipped.cmp(&b.shipped).then(a.due_date.cmp(&b.due_date))
+        a.postage_printed.cmp(&b.postage_printed).then(a.due_date.cmp(&b.due_date))
     });
 
     Ok(all_orders)

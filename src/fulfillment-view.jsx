@@ -1,6 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { SHOP_IDS } from "./config";
 
-// ── Mock data (replace with Tauri invoke("get_orders")) ──────────────────────
+const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
+
+// ── Dev fallback (used when running outside the Tauri shell) ─────────────────
 const MOCK_ORDERS = [
   {
     id: "IE-4821",
@@ -310,26 +313,60 @@ function ColHeader({ label }) {
 
 // ── Main View ─────────────────────────────────────────────────────────────────
 export default function FulfillmentView() {
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [filter, setFilter] = useState("open");
   const [expandedId, setExpandedId] = useState(null);
 
-  const filtered = useMemo(() => {
-    let orders = [...MOCK_ORDERS];
-    if (filter === "open")    orders = orders.filter(o => o.status !== "completed");
-    if (filter === "shipped") orders = orders.filter(o => o.status === "completed");
-    if (filter === "overdue") orders = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0);
-    if (filter === "notes")   orders = orders.filter(o => o.details.special_instructions?.trim().length > 0);
-    orders.sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
-    return orders;
-  }, [filter]);
+  const loadOrders = useCallback(async (forceRefresh = false) => {
+    if (!isTauri) {
+      setOrders(MOCK_ORDERS);
+      setLoading(false);
+      setLastUpdated(new Date());
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/tauri");
+      const data = await invoke("get_orders", {
+        shopIds: SHOP_IDS,
+        forceRefresh: forceRefresh || undefined,
+      });
+      setOrders(data);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const openCount    = MOCK_ORDERS.filter(o => o.status !== "completed").length;
-  const overdueCount = MOCK_ORDERS.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0).length;
-  const notesCount   = MOCK_ORDERS.filter(o => o.details.special_instructions?.trim().length > 0).length;
-  const shippedCount = MOCK_ORDERS.filter(o => o.status === "completed").length;
+  useEffect(() => {
+    loadOrders();
+    const interval = setInterval(() => loadOrders(), 20 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadOrders]);
+
+  const filtered = useMemo(() => {
+    let list = [...orders];
+    if (filter === "open")    list = list.filter(o => o.status !== "completed");
+    if (filter === "shipped") list = list.filter(o => o.status === "completed");
+    if (filter === "overdue") list = list.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0);
+    if (filter === "notes")   list = list.filter(o => o.details.special_instructions?.trim().length > 0);
+    list.sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
+    return list;
+  }, [filter, orders]);
+
+  const openCount    = orders.filter(o => o.status !== "completed").length;
+  const overdueCount = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0).length;
+  const notesCount   = orders.filter(o => o.details.special_instructions?.trim().length > 0).length;
+  const shippedCount = orders.filter(o => o.status === "completed").length;
 
   const filters = [
-    { key: "all",     label: "All",     count: MOCK_ORDERS.length },
+    { key: "all",     label: "All",     count: orders.length },
     { key: "open",    label: "Open",    count: openCount },
     { key: "overdue", label: "Overdue", count: overdueCount, danger: true },
     { key: "notes",   label: "Notes",   count: notesCount,   warn: true },
@@ -345,10 +382,34 @@ export default function FulfillmentView() {
     }}>
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
-        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.02em" }}>
-          Inspired Eclectics
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.02em" }}>
+            Inspired Eclectics
+          </div>
+          <button
+            onClick={() => loadOrders(true)}
+            disabled={loading}
+            style={{
+              fontFamily: "'DM Sans', sans-serif",
+              fontSize: 12,
+              color: loading ? "#ccc" : "#888",
+              background: "none",
+              border: "none",
+              cursor: loading ? "default" : "pointer",
+              padding: "4px 0",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+            }}
+          >
+            <span style={{ fontSize: 14, display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>↻</span>
+            {loading && orders.length > 0 ? "Updating…" : "Refresh"}
+          </button>
         </div>
-        <div style={{ fontSize: 13, color: "#aaa", marginTop: 3 }}>Order fulfillment queue · sorted by due date</div>
+        <div style={{ fontSize: 13, color: "#aaa", marginTop: 3 }}>
+          Order fulfillment queue · sorted by due date
+          {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`}
+        </div>
       </div>
 
       {/* Filter pills */}
@@ -410,7 +471,27 @@ export default function FulfillmentView() {
 
       {/* Order rows */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {filtered.length === 0 && (
+        {loading && orders.length === 0 && (
+          <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#bbb" }}>
+            Loading orders…
+          </div>
+        )}
+        {!loading && error && orders.length === 0 && (
+          <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#c0392b" }}>
+            <div style={{ marginBottom: 12 }}>{error}</div>
+            <button onClick={() => loadOrders()} style={{
+              fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+              color: "#888", background: "#fff", border: "1px solid #ddd",
+              borderRadius: 6, padding: "6px 14px", cursor: "pointer",
+            }}>Retry</button>
+          </div>
+        )}
+        {!loading && !error && orders.length === 0 && isTauri && SHOP_IDS.length === 0 && (
+          <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#bbb" }}>
+            No shops configured — add your shop IDs to <code>src/config.js</code>.
+          </div>
+        )}
+        {!loading && filtered.length === 0 && orders.length > 0 && (
           <div style={{
             textAlign: "center", padding: "48px 0",
             fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#bbb",
