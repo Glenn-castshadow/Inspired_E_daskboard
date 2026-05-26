@@ -105,18 +105,24 @@ struct TokenResponse {
 
 // ── Normalized types (what the frontend receives) ────────────────────────────
 
-#[derive(Debug, Serialize, Clone)]
-pub struct Order {
-    pub id: String,
-    pub product: String,
-    pub buyer: String,
-    pub finish: Option<String>,
-    pub material: Option<String>,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OrderDetails {
     pub hanging_holes: Option<u32>,
+    pub special_instructions: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Order {
+    pub id: String,          // "IE-{receipt_id}" — display format
+    pub receipt_id: String,
+    pub product_name: String,
+    pub finish: Option<String>,
     pub due_date: String,      // "YYYY-MM-DD"
     pub received_date: String, // "YYYY-MM-DD"
-    pub note: Option<String>,
-    pub shipped: bool,
+    pub status: String,        // "open" | "completed"
+    pub postage_printed: bool, // true when status == "completed"
+    pub details: OrderDetails,
+    pub buyer: String,
     pub shop_id: u64,
 }
 
@@ -411,16 +417,21 @@ fn parse_hanging_holes(s: &str) -> Option<u32> {
 fn normalize(receipt: Receipt, shop_id: u64) -> Order {
     let txn = receipt.transactions.into_iter().next();
 
-    let product = txn.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+    let product_name = txn.as_ref().map(|t| t.title.clone()).unwrap_or_default();
     let vars = txn.as_ref().map(|t| t.variations.as_slice()).unwrap_or(&[]);
     let finish = find_variation(vars, "Finish").map(str::to_string);
-    let material = find_variation(vars, "Material").map(str::to_string);
 
+    // hanging_holes from the personalization field (e.g. "2 holes", "None")
     let hanging_holes = txn
         .as_ref()
         .and_then(|t| t.personalization.as_ref())
         .and_then(|p| p.personalization_details.as_deref().or(p.details.as_deref()))
         .and_then(parse_hanging_holes);
+
+    // special_instructions from the buyer's message on the receipt
+    let special_instructions = receipt
+        .message_from_buyer
+        .filter(|s| !s.trim().is_empty());
 
     // Fall back to create_timestamp + 7 days if Etsy didn't set an expected ship date
     let due_date = receipt
@@ -428,19 +439,25 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         .map(unix_to_iso_date)
         .unwrap_or_else(|| unix_to_iso_date(receipt.create_timestamp + 7 * 86400));
 
-    let note = receipt.message_from_buyer.filter(|s| !s.trim().is_empty());
+    let status = if receipt.status == "completed" {
+        "completed".to_string()
+    } else {
+        "open".to_string()
+    };
+    let postage_printed = receipt.status == "completed";
+    let receipt_id = receipt.receipt_id.to_string();
 
     Order {
-        id: receipt.receipt_id.to_string(),
-        product,
-        buyer: receipt.name,
+        id: format!("IE-{}", receipt_id),
+        receipt_id,
+        product_name,
         finish,
-        material,
-        hanging_holes,
         due_date,
         received_date: unix_to_iso_date(receipt.create_timestamp),
-        note,
-        shipped: receipt.status == "completed",
+        status,
+        postage_printed,
+        details: OrderDetails { hanging_holes, special_instructions },
+        buyer: receipt.name,
         shop_id,
     }
 }

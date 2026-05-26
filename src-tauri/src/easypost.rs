@@ -73,7 +73,7 @@ pub struct TrackingLocation {
 
 // ── Our normalized type (what the frontend receives) ─────────────────────────
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TrackingInfo {
     pub tracking_number: String,
     pub status: TrackingStatus,
@@ -87,7 +87,7 @@ pub struct TrackingInfo {
     pub events: Vec<TrackingEvent>,
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TrackingStatus {
     PreTransit,
@@ -99,7 +99,7 @@ pub enum TrackingStatus {
     Unknown,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TrackingEvent {
     pub message: String,
     pub datetime: String,

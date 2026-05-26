@@ -1,276 +1,431 @@
-// src/fulfillment-view.jsx
-//
-// Fulfillment queue for all 3 Etsy shops.
-//
-// Data source (when Rust layer is ready):
-//   invoke("get_orders") -> Order[]
-//
-// Etsy field mapping notes for src-tauri/src/etsy.rs:
-//   order.shipped     <- receipt.status === "completed"
-//   order.received_date <- receipt.create_timestamp (Unix -> ISO date)
-//   order.due_date    <- receipt.expected_ship_date (Unix -> ISO date)
-//   order.buyer       <- receipt.name
-//   order.note        <- receipt.message_from_buyer (null if empty)
-//   order.finish      <- receipt.transactions[0].variations[name="Finish"].value
-//   order.material    <- receipt.transactions[0].variations[name="Material"].value
-//   order.hanging_holes <- receipt.transactions[0].personalization (parse int from string)
-//
-// "postage printed = completed" — no manual toggle. This view is read-only
-// for shipping status; it comes directly from Etsy receipt.status.
+import { useState, useMemo } from "react";
 
-import React, { useState, useMemo } from "react";
-import "./fulfillment-view.css";
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-// Replace with: const [orders, setOrders] = useState([]);
-// then on mount:  invoke("get_orders").then(setOrders);
-
+// ── Mock data (replace with Tauri invoke("get_orders")) ──────────────────────
 const MOCK_ORDERS = [
   {
-    id: "3781024956",
-    product: "Laser Cut Mandala Wall Art",
-    buyer: "Sarah M.",
-    finish: "Natural",
-    material: "Birch",
-    hanging_holes: 2,
-    due_date: "2026-05-24",
-    note: "Please add extra padding — it's a birthday gift, needs to arrive perfect",
-    shipped: false,
-    received_date: "2026-05-17",
-  },
-  {
-    id: "3781103847",
-    product: "Custom Name Sign — Script",
-    buyer: "James R.",
-    finish: "Stained Walnut",
-    material: "MDF",
-    hanging_holes: 0,
+    id: "IE-4821",
+    receipt_id: "4821",
+    product_name: "Driftwood Wall Hanging",
+    finish: "Natural Seal",
     due_date: "2026-05-26",
-    note: null,
-    shipped: false,
-    received_date: "2026-05-19",
-  },
-  {
-    id: "3780998231",
-    product: "Geometric Shelf Bracket Pair",
-    buyer: "Priya K.",
-    finish: "Black",
-    material: "Birch",
-    hanging_holes: 4,
-    due_date: "2026-05-28",
-    note: "Hang holes need to be 3/16\" — standard won't fit my wall anchors",
-    shipped: false,
     received_date: "2026-05-21",
+    status: "open",
+    postage_printed: false,
+    details: {
+      hanging_holes: 2,
+      special_instructions: "Customer wants holes at 18\" apart, not standard spacing.",
+    },
+    buyer: "Sandra M.",
   },
   {
-    id: "3780874412",
-    product: "State Outline Cut-Out — Texas",
-    buyer: "Linda H.",
+    id: "IE-4819",
+    receipt_id: "4819",
+    product_name: "Reclaimed Wood Shelf",
+    finish: "Dark Walnut Stain",
+    due_date: "2026-05-27",
+    received_date: "2026-05-20",
+    status: "open",
+    postage_printed: false,
+    details: {
+      hanging_holes: 3,
+      special_instructions: "",
+    },
+    buyer: "Tom R.",
+  },
+  {
+    id: "IE-4815",
+    receipt_id: "4815",
+    product_name: "Driftwood Wall Hanging",
+    finish: "Whitewash",
+    due_date: "2026-05-28",
+    received_date: "2026-05-19",
+    status: "open",
+    postage_printed: false,
+    details: {
+      hanging_holes: 1,
+      special_instructions: "Gift — please include note card. No pricing.",
+    },
+    buyer: "Priya K.",
+  },
+  {
+    id: "IE-4810",
+    receipt_id: "4810",
+    product_name: "Ceramic Bud Vase Set",
+    finish: "Matte White",
+    due_date: "2026-05-29",
+    received_date: "2026-05-18",
+    status: "open",
+    postage_printed: false,
+    details: {
+      hanging_holes: 0,
+      special_instructions: "Set of 3, not 2. Confirmed with buyer.",
+    },
+    buyer: "Laura B.",
+  },
+  {
+    id: "IE-4804",
+    receipt_id: "4804",
+    product_name: "Woven Jute Table Runner",
     finish: "Natural",
-    material: "Birch",
-    hanging_holes: 1,
+    due_date: "2026-05-25",
+    received_date: "2026-05-17",
+    status: "completed",
+    postage_printed: true,
+    details: {
+      hanging_holes: 0,
+      special_instructions: "",
+    },
+    buyer: "Helen T.",
+  },
+  {
+    id: "IE-4798",
+    receipt_id: "4798",
+    product_name: "Reclaimed Wood Shelf",
+    finish: "Pale Oak",
+    due_date: "2026-05-24",
+    received_date: "2026-05-16",
+    status: "completed",
+    postage_printed: true,
+    details: {
+      hanging_holes: 2,
+      special_instructions: "Drill holes before finishing, not after.",
+    },
+    buyer: "James W.",
+  },
+  {
+    id: "IE-4791",
+    receipt_id: "4791",
+    product_name: "Hand-Poured Soy Candle",
+    finish: "Unscented / Linen Wick",
     due_date: "2026-05-30",
-    note: null,
-    shipped: false,
     received_date: "2026-05-22",
-  },
-  {
-    id: "3780756389",
-    product: "Laser Cut Mandala Wall Art",
-    buyer: "Tom W.",
-    finish: "Stained Walnut",
-    material: "Birch",
-    hanging_holes: 2,
-    due_date: "2026-05-19",
-    note: null,
-    shipped: true,
-    received_date: "2026-05-12",
-  },
-  {
-    id: "3780621047",
-    product: "Custom Wedding Date Sign",
-    buyer: "Ashley D.",
-    finish: "White",
-    material: "MDF",
-    hanging_holes: 2,
-    due_date: "2026-06-02",
-    note: null,
-    shipped: false,
-    received_date: "2026-05-24",
+    status: "open",
+    postage_printed: false,
+    details: {
+      hanging_holes: 0,
+      special_instructions: "Allergic to lavender — confirmed unscented variant.",
+    },
+    buyer: "Mei C.",
   },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-function getToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-function parseDue(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
+// Local midnight avoids UTC/local offset causing wrong day counts
+const parseDue = (str) => {
+  const [y, m, d] = str.split("-").map(Number);
   return new Date(y, m - 1, d);
-}
+};
 
-function dueDaysFrom(iso, today) {
-  return Math.round((parseDue(iso) - today) / 86400000);
-}
+const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
 
-function formatDate(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
-}
+const daysUntil = (dateStr) =>
+  Math.round((parseDue(dateStr) - today) / 86400000);
 
-function dueBadgeClass(order, today) {
-  if (order.shipped) return "due-shipped";
-  const days = dueDaysFrom(order.due_date, today);
-  if (days < 0) return "due-overdue";
-  if (days <= 1) return "due-soon";
-  return "due-normal";
-}
+const dueBadge = (dateStr, status) => {
+  if (status === "completed") return { label: "Shipped",    bg: "#f0faf4", color: "#2D6A4F", dot: "#2D6A4F" };
+  const d = daysUntil(dateStr);
+  if (d < 0)   return { label: "Overdue",   bg: "#fff1f0", color: "#c0392b", dot: "#e74c3c" };
+  if (d === 0) return { label: "Due today", bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
+  if (d === 1) return { label: "Due tmrw",  bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
+  return       { label: `Due in ${d}d`,     bg: "#f4f4f0", color: "#666",    dot: "#bbb"    };
+};
 
-function dueBadgeText(order, today) {
-  if (order.shipped) return "Shipped";
-  const days = dueDaysFrom(order.due_date, today);
-  const label = formatDate(order.due_date);
-  if (days < 0) return `Overdue · ${label}`;
-  if (days === 0) return `Due today`;
-  if (days === 1) return `Due tomorrow`;
-  return `Due ${label}`;
-}
+const fmtDate = (str) => {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+};
 
-// ── Filter logic ──────────────────────────────────────────────────────────────
-
-const FILTERS = ["All", "Open", "Overdue", "Notes", "Shipped"];
-
-function filterOrders(orders, filter, today) {
-  switch (filter) {
-    case "Open":    return orders.filter(o => !o.shipped);
-    case "Overdue": return orders.filter(o => !o.shipped && dueDaysFrom(o.due_date, today) < 0);
-    case "Notes":   return orders.filter(o => o.note);
-    case "Shipped": return orders.filter(o => o.shipped);
-    default:        return orders;
-  }
-}
-
-function countFor(filter, orders, today) {
-  return filterOrders(orders, filter, today).length;
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
-
-export default function FulfillmentView() {
-  const [activeFilter, setActiveFilter] = useState("All");
-  const [expandedId, setExpandedId] = useState(null);
-
-  const today = useMemo(() => getToday(), []);
-
-  const visible = useMemo(() => {
-    const filtered = filterOrders(MOCK_ORDERS, activeFilter, today);
-    return [...filtered].sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
-  }, [activeFilter, today]);
-
-  function toggleExpand(id) {
-    setExpandedId(prev => (prev === id ? null : id));
-  }
+// ── Order Row ────────────────────────────────────────────────────────────────
+function OrderRow({ order, expanded, onToggle }) {
+  const badge = dueBadge(order.due_date, order.status);
+  const isShipped = order.status === "completed";
+  const hasInstructions = order.details.special_instructions?.trim().length > 0;
 
   return (
-    <div className="fulfillment-view">
-      <div className="filter-bar">
-        {FILTERS.map(f => {
-          const count = countFor(f, MOCK_ORDERS, today);
-          return (
-            <button
-              key={f}
-              className={[
-                "pill",
-                activeFilter === f ? "active" : "",
-                f === "Overdue" ? "filter-overdue" : "",
-                f === "Notes"   ? "filter-notes"   : "",
-              ].join(" ").trim()}
-              onClick={() => setActiveFilter(f)}
-            >
-              {f}
-              <span className="pill-count">{count}</span>
-            </button>
-          );
-        })}
+    <div style={{
+      background: isShipped ? "#fafaf8" : "#fff",
+      border: "1px solid",
+      borderColor: isShipped ? "#ebebea" : "#e4e4e0",
+      borderRadius: 10,
+      overflow: "hidden",
+      opacity: isShipped ? 0.72 : 1,
+      transition: "box-shadow 0.15s",
+    }}>
+      {/* Main row */}
+      <div
+        onClick={onToggle}
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 160px 130px 90px 36px",
+          alignItems: "center",
+          gap: 16,
+          padding: "14px 20px",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        {/* Product + buyer */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{
+              fontFamily: "'Playfair Display', serif",
+              fontSize: 14,
+              fontWeight: 600,
+              color: isShipped ? "#888" : "#1a1a1a",
+            }}>
+              {order.product_name}
+            </span>
+            {hasInstructions && !isShipped && (
+              <span title="Has special instructions" style={{
+                fontSize: 10,
+                background: "#fff3cd",
+                color: "#856404",
+                border: "1px solid #ffd97d",
+                borderRadius: 4,
+                padding: "1px 5px",
+                fontFamily: "'DM Sans', sans-serif",
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+              }}>NOTE</span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: "#aaa", marginTop: 2, fontFamily: "'DM Sans', sans-serif" }}>
+            {order.id} · {order.buyer}
+          </div>
+        </div>
+
+        {/* Finish */}
+        <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: isShipped ? "#aaa" : "#444" }}>
+          {order.finish}
+        </div>
+
+        {/* Due date */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif",
+            color: badge.color, background: badge.bg,
+            padding: "3px 8px", borderRadius: 20, width: "fit-content",
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: badge.dot, display: "inline-block" }} />
+            {badge.label}
+          </span>
+          <span style={{ fontSize: 11, color: "#bbb", fontFamily: "'DM Sans', sans-serif", paddingLeft: 2 }}>
+            {fmtDate(order.due_date)}
+          </span>
+        </div>
+
+        {/* Postage */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          {isShipped ? (
+            <span style={{
+              fontSize: 11, fontFamily: "'DM Sans', sans-serif",
+              color: "#2D6A4F", display: "flex", alignItems: "center", gap: 4,
+            }}>
+              <span style={{ fontSize: 14 }}>✓</span> Printed
+            </span>
+          ) : (
+            <span style={{ fontSize: 11, fontFamily: "'DM Sans', sans-serif", color: "#ccc" }}>
+              Pending
+            </span>
+          )}
+        </div>
+
+        {/* Expand chevron */}
+        <div style={{
+          color: "#ccc", fontSize: 14, textAlign: "center",
+          transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+          transition: "transform 0.2s",
+        }}>
+          ▾
+        </div>
       </div>
 
-      <div className="orders-list">
-        {visible.length === 0 && (
-          <div className="empty-state">No orders in this filter.</div>
+      {/* Expanded detail drawer */}
+      {expanded && (
+        <div style={{
+          borderTop: "1px solid #f0efeb",
+          padding: "16px 20px 18px",
+          background: "#fdfdfb",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          gap: 20,
+        }}>
+          <DetailBlock label="Order Received" value={fmtDate(order.received_date)} />
+          <DetailBlock
+            label="Hanging Holes"
+            value={order.details.hanging_holes === 0
+              ? "None"
+              : `${order.details.hanging_holes} hole${order.details.hanging_holes > 1 ? "s" : ""}`}
+          />
+          <DetailBlock
+            label="Special Instructions"
+            value={order.details.special_instructions || "—"}
+            highlight={hasInstructions && !isShipped}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DetailBlock({ label, value, highlight }) {
+  return (
+    <div>
+      <div style={{
+        fontFamily: "'DM Sans', sans-serif",
+        fontSize: 10,
+        textTransform: "uppercase",
+        letterSpacing: "0.09em",
+        color: "#bbb",
+        marginBottom: 4,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: "'DM Sans', sans-serif",
+        fontSize: 13,
+        color: highlight ? "#7a5c00" : "#444",
+        background: highlight ? "#fffbea" : "transparent",
+        padding: highlight ? "6px 10px" : 0,
+        borderRadius: highlight ? 6 : 0,
+        border: highlight ? "1px solid #ffe58a" : "none",
+        lineHeight: 1.5,
+      }}>{value}</div>
+    </div>
+  );
+}
+
+// ── Column header ─────────────────────────────────────────────────────────────
+function ColHeader({ label }) {
+  return (
+    <div style={{
+      fontFamily: "'DM Sans', sans-serif",
+      fontSize: 10,
+      textTransform: "uppercase",
+      letterSpacing: "0.09em",
+      color: "#bbb",
+    }}>{label}</div>
+  );
+}
+
+// ── Main View ─────────────────────────────────────────────────────────────────
+export default function FulfillmentView() {
+  const [filter, setFilter] = useState("open");
+  const [expandedId, setExpandedId] = useState(null);
+
+  const filtered = useMemo(() => {
+    let orders = [...MOCK_ORDERS];
+    if (filter === "open")    orders = orders.filter(o => o.status !== "completed");
+    if (filter === "shipped") orders = orders.filter(o => o.status === "completed");
+    if (filter === "overdue") orders = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0);
+    if (filter === "notes")   orders = orders.filter(o => o.details.special_instructions?.trim().length > 0);
+    orders.sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
+    return orders;
+  }, [filter]);
+
+  const openCount    = MOCK_ORDERS.filter(o => o.status !== "completed").length;
+  const overdueCount = MOCK_ORDERS.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0).length;
+  const notesCount   = MOCK_ORDERS.filter(o => o.details.special_instructions?.trim().length > 0).length;
+  const shippedCount = MOCK_ORDERS.filter(o => o.status === "completed").length;
+
+  const filters = [
+    { key: "all",     label: "All",     count: MOCK_ORDERS.length },
+    { key: "open",    label: "Open",    count: openCount },
+    { key: "overdue", label: "Overdue", count: overdueCount, danger: true },
+    { key: "notes",   label: "Notes",   count: notesCount,   warn: true },
+    { key: "shipped", label: "Shipped", count: shippedCount },
+  ];
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "#f7f7f5",
+      padding: "32px 40px",
+      fontFamily: "'DM Sans', sans-serif",
+    }}>
+      {/* Header */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.02em" }}>
+          Inspired Eclectics
+        </div>
+        <div style={{ fontSize: 13, color: "#aaa", marginTop: 3 }}>Order fulfillment queue · sorted by due date</div>
+      </div>
+
+      {/* Filter pills */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+        {filters.map(f => (
+          <button key={f.key} onClick={() => setFilter(f.key)} style={{
+            padding: "6px 14px",
+            borderRadius: 20,
+            border: "1.5px solid",
+            borderColor: filter === f.key
+              ? f.danger ? "#e74c3c" : f.warn ? "#f39c12" : "#2D6A4F"
+              : "#e0e0dc",
+            background: filter === f.key
+              ? f.danger ? "#fff1f0" : f.warn ? "#fff8ec" : "#f0faf4"
+              : "#fff",
+            color: filter === f.key
+              ? f.danger ? "#c0392b" : f.warn ? "#b7600a" : "#2D6A4F"
+              : "#888",
+            fontSize: 12,
+            fontWeight: filter === f.key ? 600 : 400,
+            fontFamily: "'DM Sans', sans-serif",
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            transition: "all 0.15s",
+          }}>
+            {f.label}
+            <span style={{
+              background: filter === f.key
+                ? f.danger ? "#e74c3c" : f.warn ? "#f39c12" : "#2D6A4F"
+                : "#e8e8e4",
+              color: filter === f.key ? "#fff" : "#999",
+              fontSize: 10,
+              fontWeight: 700,
+              borderRadius: 10,
+              padding: "1px 6px",
+              minWidth: 18,
+              textAlign: "center",
+            }}>{f.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Column headers */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 160px 130px 90px 36px",
+        gap: 16,
+        padding: "0 20px",
+        marginBottom: 8,
+      }}>
+        <ColHeader label="Product / Order" />
+        <ColHeader label="Finish" />
+        <ColHeader label="Due Date" />
+        <ColHeader label="Postage" />
+        <div />
+      </div>
+
+      {/* Order rows */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {filtered.length === 0 && (
+          <div style={{
+            textAlign: "center", padding: "48px 0",
+            fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#bbb",
+          }}>
+            No orders match this filter.
+          </div>
         )}
-        {visible.map(order => {
-          const expanded = expandedId === order.id;
-          return (
-            <div
-              key={order.id}
-              className={`order-card${expanded ? " expanded" : ""}`}
-              onClick={() => toggleExpand(order.id)}
-            >
-              <div className="order-row">
-                {/* Left: product name, order ID, buyer */}
-                <div className="order-left">
-                  <div className="order-primary">
-                    <span className="order-product">{order.product}</span>
-                    {order.note && <span className="note-badge">NOTE</span>}
-                  </div>
-                  <div className="order-secondary">
-                    <span className="order-id">#{order.id}</span>
-                    <span>{order.buyer}</span>
-                  </div>
-                </div>
-
-                {/* Finish / material */}
-                <div className="order-finish">
-                  {order.finish} / {order.material}
-                </div>
-
-                {/* Due date */}
-                <span className={`due-badge ${dueBadgeClass(order, today)}`}>
-                  {dueBadgeText(order, today)}
-                </span>
-
-                {/* Postage */}
-                <div className="postage-status">
-                  <span className={`postage-dot ${order.shipped ? "shipped" : "pending"}`} />
-                  {order.shipped ? "Shipped" : "Not shipped"}
-                </div>
-              </div>
-
-              {expanded && (
-                <div
-                  className="order-detail"
-                  onClick={e => e.stopPropagation()}
-                >
-                  <div className="detail-item">
-                    <span className="detail-label">Received</span>
-                    <span className="detail-value">{formatDate(order.received_date)}, {order.received_date.slice(0, 4)}</span>
-                  </div>
-                  <div className="detail-item">
-                    <span className="detail-label">Hanging holes</span>
-                    <span className="detail-value">{order.hanging_holes === 0 ? "None" : order.hanging_holes}</span>
-                  </div>
-                  <div className="detail-item">
-                    <span className="detail-label">Finish / Material</span>
-                    <span className="detail-value">{order.finish} / {order.material}</span>
-                  </div>
-                  {order.note && (
-                    <div className="detail-item detail-note">
-                      <span className="detail-label">Special instructions</span>
-                      <div className="note-text">{order.note}</div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {filtered.map(order => (
+          <OrderRow
+            key={order.id}
+            order={order}
+            expanded={expandedId === order.id}
+            onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
+          />
+        ))}
       </div>
     </div>
   );
