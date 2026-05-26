@@ -62,11 +62,14 @@ src-tauri/
 
 ## Setup
 
-### 1. Install dependencies
+### 1. Install dependencies and activate git hooks
 
 ```powershell
 npm install
+git config core.hooksPath .githooks
 ```
+
+The second command activates the pre-commit hook that auto-bumps the patch version on every commit. Run it once after cloning — it's not automatic.
 
 ### 2. Configure API keys
 
