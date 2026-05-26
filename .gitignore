@@ -1,0 +1,25 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Cargo
+target/
+src-tauri/target/
+
+# Tauri
+src-tauri/WixTools/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
