@@ -29,8 +29,8 @@ base64 = "0.21"
 sha2 = "0.10"
 chrono = "0.4"
 
-# SQLite — add when building the cache layer
-# rusqlite = { version = "0.31", features = ["bundled"] }
+# SQLite cache
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [profile.release]
 opt-level = "s"

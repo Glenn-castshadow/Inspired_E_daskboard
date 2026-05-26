@@ -9,6 +9,7 @@
 //   3. Call set_etsy_api_key("your_keystring") once from the settings UI
 //   4. Call etsy_connect(shop_id) for each shop — opens browser for OAuth
 
+use crate::cache::CacheDb;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -534,20 +535,57 @@ pub async fn etsy_connect(
     Ok(())
 }
 
-/// Fetch paid orders from one or more shops, sorted due-date ascending
-/// with open orders before shipped.
+/// Fetch paid orders from one or more shops.
+///
+/// Returns cached data (SQLite) if each shop's cache is younger than
+/// ORDER_CACHE_MAX_AGE seconds. Pass force_refresh: true to bypass the
+/// cache and always hit the Etsy API.
+///
+/// Results are sorted: open orders first, then shipped; due-date ascending
+/// within each group.
 #[tauri::command]
 pub async fn get_orders(
     shop_ids: Vec<u64>,
+    force_refresh: Option<bool>,
     state: State<'_, EtsyState>,
+    cache: State<'_, CacheDb>,
 ) -> Result<Vec<Order>, String> {
+    const ORDER_CACHE_MAX_AGE: i64 = 20 * 60; // 20 minutes
+    let force = force_refresh.unwrap_or(false);
+
     let api_key = resolve_api_key(&state).await?;
-    let mut all_orders = Vec::new();
+    let mut all_orders: Vec<Order> = Vec::new();
 
     for shop_id in shop_ids {
+        // Serve from cache if fresh enough
+        if !force {
+            if let Some(age) = cache.shop_age_secs(shop_id) {
+                if age < ORDER_CACHE_MAX_AGE {
+                    let blobs = cache.get_orders_for_shops(&[shop_id])?;
+                    let cached: Vec<Order> = blobs
+                        .iter()
+                        .filter_map(|j| serde_json::from_str(j).ok())
+                        .collect();
+                    all_orders.extend(cached);
+                    continue;
+                }
+            }
+        }
+
+        // Cache miss or stale — fetch from Etsy
         let token = get_valid_token(&state.client, &api_key, shop_id, &state).await?;
-        let mut orders = fetch_shop_orders(&state.client, &api_key, &token, shop_id).await?;
-        all_orders.append(&mut orders);
+        let orders = fetch_shop_orders(&state.client, &api_key, &token, shop_id).await?;
+
+        let rows: Vec<(String, u64, String)> = orders
+            .iter()
+            .filter_map(|o| {
+                serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j))
+            })
+            .collect();
+        cache.upsert_orders(&rows)?;
+        cache.mark_shop_synced(shop_id)?;
+
+        all_orders.extend(orders);
     }
 
     all_orders.sort_by(|a, b| {

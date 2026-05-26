@@ -10,6 +10,7 @@
 //      or set env var EASYPOST_API_KEY for development
 //   3. Register this module in main.rs and add commands to tauri builder
 
+use crate::cache::CacheDb;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -276,43 +277,66 @@ async fn fetch_tracker(
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
-/// Track a single package. Uses in-memory cache — call refresh_tracking to force a fresh fetch.
+/// Track a single package.
+///
+/// Cache hierarchy (fastest to slowest):
+///   1. In-memory HashMap — same session, instant
+///   2. SQLite — persists across restarts, up to TRACKING_CACHE_MAX_AGE seconds old
+///   3. EasyPost API — always fresh
 #[tauri::command]
 pub async fn get_tracking(
     tracking_number: String,
     state: State<'_, EasyPostState>,
+    db: State<'_, CacheDb>,
 ) -> Result<TrackingInfo, TrackingError> {
+    const TRACKING_CACHE_MAX_AGE: i64 = 15 * 60; // 15 minutes
+
+    // 1. In-memory
     {
-        let cache = state.cache.lock().await;
-        if let Some(info) = cache.get(&tracking_number) {
+        let mem = state.cache.lock().await;
+        if let Some(info) = mem.get(&tracking_number) {
             return Ok(info.clone());
         }
     }
 
+    // 2. SQLite
+    if let Some((fetched_at, json)) = db.get_tracking(&tracking_number) {
+        if crate::cache::now_unix() - fetched_at < TRACKING_CACHE_MAX_AGE {
+            if let Ok(info) = serde_json::from_str::<TrackingInfo>(&json) {
+                state.cache.lock().await.insert(tracking_number, info.clone());
+                return Ok(info);
+            }
+        }
+    }
+
+    // 3. API
     let api_key = resolve_api_key(&state).await?;
     let tracker = fetch_tracker(&state.client, &api_key, &tracking_number).await?;
     let info = normalize(tracker);
 
-    {
-        let mut cache = state.cache.lock().await;
-        cache.insert(tracking_number, info.clone());
+    if let Ok(json) = serde_json::to_string(&info) {
+        let _ = db.upsert_tracking(&tracking_number, &json);
     }
+    state.cache.lock().await.insert(tracking_number, info.clone());
 
     Ok(info)
 }
 
-/// Force-refresh a single tracking number, bypassing cache.
+/// Force-refresh a single tracking number, bypassing both caches.
 #[tauri::command]
 pub async fn refresh_tracking(
     tracking_number: String,
     state: State<'_, EasyPostState>,
+    db: State<'_, CacheDb>,
 ) -> Result<TrackingInfo, TrackingError> {
     let api_key = resolve_api_key(&state).await?;
     let tracker = fetch_tracker(&state.client, &api_key, &tracking_number).await?;
     let info = normalize(tracker);
 
-    let mut cache = state.cache.lock().await;
-    cache.insert(tracking_number, info.clone());
+    if let Ok(json) = serde_json::to_string(&info) {
+        let _ = db.upsert_tracking(&tracking_number, &json);
+    }
+    state.cache.lock().await.insert(tracking_number.clone(), info.clone());
 
     Ok(info)
 }
