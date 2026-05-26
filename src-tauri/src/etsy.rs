@@ -71,6 +71,13 @@ struct Receipt {
     create_timestamp: i64,
     expected_ship_date: Option<i64>,
     transactions: Vec<Transaction>,
+    #[serde(default)]
+    shipments: Vec<Shipment>,
+}
+
+#[derive(Deserialize)]
+struct Shipment {
+    tracking_code: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -124,6 +131,7 @@ pub struct Order {
     pub details: OrderDetails,
     pub buyer: String,
     pub shop_id: u64,
+    pub tracking_code: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -415,6 +423,11 @@ fn parse_hanging_holes(s: &str) -> Option<u32> {
 }
 
 fn normalize(receipt: Receipt, shop_id: u64) -> Order {
+    let tracking_code = receipt.shipments.first()
+        .and_then(|s| s.tracking_code.as_deref())
+        .filter(|t| !t.is_empty())
+        .map(str::to_string);
+
     let txn = receipt.transactions.into_iter().next();
 
     let product_name = txn.as_ref().map(|t| t.title.clone()).unwrap_or_default();
@@ -459,6 +472,7 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         details: OrderDetails { hanging_holes, special_instructions },
         buyer: receipt.name,
         shop_id,
+        tracking_code,
     }
 }
 

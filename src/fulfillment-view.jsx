@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { SHOP_IDS } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
@@ -74,6 +74,7 @@ const MOCK_ORDERS = [
     received_date: "2026-05-17",
     status: "completed",
     postage_printed: true,
+    tracking_code: "9400111899223773219453",
     details: {
       hanging_holes: 0,
       special_instructions: "",
@@ -89,6 +90,7 @@ const MOCK_ORDERS = [
     received_date: "2026-05-16",
     status: "completed",
     postage_printed: true,
+    tracking_code: "9400111899223773219460",
     details: {
       hanging_holes: 2,
       special_instructions: "Drill holes before finishing, not after.",
@@ -139,8 +141,61 @@ const fmtDate = (str) => {
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
 
+// ── Tracking helpers ──────────────────────────────────────────────────────────
+
+const trackingBadge = (status) => {
+  switch (status) {
+    case "pre_transit":      return { bg: "#f4f4f0", color: "#888",    dot: "#bbb"    };
+    case "in_transit":       return { bg: "#eff6ff", color: "#1d4ed8", dot: "#3b82f6" };
+    case "out_for_delivery": return { bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
+    case "delivered":        return { bg: "#f0faf4", color: "#2D6A4F", dot: "#2D6A4F" };
+    case "return_to_sender":
+    case "failure":          return { bg: "#fff1f0", color: "#c0392b", dot: "#e74c3c" };
+    default:                 return { bg: "#f4f4f0", color: "#888",    dot: "#bbb"    };
+  }
+};
+
+function TrackingSection({ entry, code }) {
+  if (!entry)            return <div style={{ fontSize: 12, color: "#ccc", fontFamily: "'DM Sans', sans-serif" }}>Loading tracking…</div>;
+  if (entry.error)       return <div style={{ fontSize: 12, color: "#bbb", fontFamily: "'DM Sans', sans-serif" }}>Tracking unavailable · <span style={{ fontFamily: "monospace" }}>{code}</span></div>;
+  if (!entry.info)       return null;
+
+  const t = entry.info;
+  const badge = trackingBadge(t.status);
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', sans-serif" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <span style={{
+          display: "inline-flex", alignItems: "center", gap: 5,
+          fontSize: 11, fontWeight: 600, color: badge.color, background: badge.bg,
+          padding: "3px 8px", borderRadius: 20,
+        }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: badge.dot, display: "inline-block" }} />
+          {t.status_label}
+        </span>
+        <span style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace" }}>{t.tracking_number}</span>
+        {t.est_delivery_date && (
+          <span style={{ fontSize: 11, color: "#888" }}>
+            Est. {new Date(t.est_delivery_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+          </span>
+        )}
+      </div>
+      {t.last_message && (
+        <div style={{ fontSize: 12, color: "#999", marginTop: 5 }}>
+          {t.last_location ? `${t.last_location} — ` : ""}{t.last_message}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, expanded, onToggle }) {
+function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) {
+  useEffect(() => {
+    if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
+    onTrackingLoad(order.id, order.tracking_code);
+  }, [expanded, trackingEntry, onTrackingLoad, order.id, order.tracking_code, order.postage_printed]);
   const badge = dueBadge(order.due_date, order.status);
   const isShipped = order.status === "completed";
   const hasInstructions = order.details.special_instructions?.trim().length > 0;
@@ -247,26 +302,45 @@ function OrderRow({ order, expanded, onToggle }) {
 
       {/* Expanded detail drawer */}
       {expanded && (
-        <div style={{
-          borderTop: "1px solid #f0efeb",
-          padding: "16px 20px 18px",
-          background: "#fdfdfb",
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
-          gap: 20,
-        }}>
-          <DetailBlock label="Order Received" value={fmtDate(order.received_date)} />
-          <DetailBlock
-            label="Hanging Holes"
-            value={order.details.hanging_holes === 0
-              ? "None"
-              : `${order.details.hanging_holes} hole${order.details.hanging_holes > 1 ? "s" : ""}`}
-          />
-          <DetailBlock
-            label="Special Instructions"
-            value={order.details.special_instructions || "—"}
-            highlight={hasInstructions && !isShipped}
-          />
+        <div style={{ borderTop: "1px solid #f0efeb", background: "#fdfdfb" }}>
+          <div style={{
+            padding: "16px 20px 18px",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr 1fr",
+            gap: 20,
+          }}>
+            <DetailBlock label="Order Received" value={fmtDate(order.received_date)} />
+            <DetailBlock
+              label="Hanging Holes"
+              value={order.details.hanging_holes === 0
+                ? "None"
+                : `${order.details.hanging_holes} hole${order.details.hanging_holes > 1 ? "s" : ""}`}
+            />
+            <DetailBlock
+              label="Special Instructions"
+              value={order.details.special_instructions || "—"}
+              highlight={hasInstructions && !isShipped}
+            />
+          </div>
+          {isShipped && order.tracking_code && (
+            <div style={{
+              borderTop: "1px solid #f0efeb",
+              padding: "12px 20px 14px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}>
+              <div style={{
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: 10,
+                textTransform: "uppercase",
+                letterSpacing: "0.09em",
+                color: "#bbb",
+                marginBottom: 6,
+              }}>Tracking</div>
+              <TrackingSection entry={trackingEntry} code={order.tracking_code} />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -319,6 +393,8 @@ export default function FulfillmentView() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [filter, setFilter] = useState("open");
   const [expandedId, setExpandedId] = useState(null);
+  const [trackingCache, setTrackingCache] = useState({});
+  const fetchingTracking = useRef(new Set());
 
   const loadOrders = useCallback(async (forceRefresh = false) => {
     if (!isTauri) {
@@ -349,6 +425,21 @@ export default function FulfillmentView() {
     const interval = setInterval(() => loadOrders(), 20 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders]);
+
+  const handleTrackingLoad = useCallback((orderId, trackingNumber) => {
+    if (fetchingTracking.current.has(orderId)) return;
+    fetchingTracking.current.add(orderId);
+
+    const doFetch = isTauri
+      ? import("@tauri-apps/api/tauri").then(({ invoke }) =>
+          invoke("get_tracking", { trackingNumber }))
+      : Promise.reject("not in tauri");
+
+    doFetch
+      .then(info => setTrackingCache(prev => ({ ...prev, [orderId]: { info } })))
+      .catch(err => setTrackingCache(prev => ({ ...prev, [orderId]: { error: String(err) } })))
+      .finally(() => fetchingTracking.current.delete(orderId));
+  }, []);
 
   const filtered = useMemo(() => {
     let list = [...orders];
@@ -505,6 +596,8 @@ export default function FulfillmentView() {
             order={order}
             expanded={expandedId === order.id}
             onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
+            trackingEntry={trackingCache[order.id]}
+            onTrackingLoad={handleTrackingLoad}
           />
         ))}
       </div>
