@@ -1,0 +1,11 @@
+#!/bin/sh
+# .githooks/pre-commit
+# Bumps the patch version and stages the changed files into the current commit.
+
+ROOT=$(git rev-parse --show-toplevel)
+NEW_VER=$(node "$ROOT/scripts/bump-version.cjs")
+git add \
+  "$ROOT/package.json" \
+  "$ROOT/src-tauri/Cargo.toml" \
+  "$ROOT/src-tauri/tauri.conf.json"
+echo "version → $NEW_VER"
