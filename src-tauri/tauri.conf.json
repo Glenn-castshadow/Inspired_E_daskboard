@@ -3,11 +3,12 @@
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devPath": "http://localhost:5173",
-    "distDir": "../dist"
+    "distDir": "../dist",
+    "withGlobalTauri": true
   },
   "package": {
-    "productName": "Inspired Eclectics Dashboard",
-    "version": "0.1.8"
+    "productName": "etsy-dashboard",
+    "version": "0.1.9"
   },
   "tauri": {
     "allowlist": {
@@ -30,7 +31,7 @@
     },
     "windows": [
       {
-        "title": "Inspired Eclectics Dashboard",
+        "title": "Genevieve Etsy Dashboard",
         "width": 1280,
         "height": 800,
         "resizable": true,

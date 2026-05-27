@@ -1,19 +1,20 @@
-# Inspired Eclectics Dashboard
+# Genevieve Etsy Dashboard
 
-Internal Tauri desktop app for managing orders across all 3 Etsy shops. Replaces manual order tracking with a unified fulfillment queue and analytics view.
+Internal Tauri desktop app for managing orders across multiple Etsy shops. Replaces manual order tracking with a unified fulfillment queue and analytics view.
 
-**Platform:** Windows 11 only · Single operator · Not a public app  
-**Current version:** v0.1.8
+**Platform:** Windows 11 only · Single operator · Not a public app
+**Current version:** v0.1.9
 
 ---
 
 ## What it does
 
-- **Fulfillment queue** — all open orders sorted by due date, color-coded by urgency, expandable rows showing buyer notes and hanging hole counts
-- **Analytics** — sales charts and shop breakdowns (in progress)
-- **Order status** is read directly from Etsy: `receipt.status === "completed"` means postage is printed, no manual toggle
-- **Local SQLite cache** — data pulled from Etsy every 20 minutes, persists across restarts
-- **USPS tracking** via EasyPost API, cached 15 minutes in SQLite
+- **Fulfillment queue** — open orders sorted by due date, color-coded by urgency, with per-shop color stripes and pills. Expand a row to see buyer notes, hanging hole counts, and live USPS tracking.
+- **Analytics dashboard** — monthly revenue/order stats, 30-day revenue trend, orders-by-shop bars, top products ranked.
+- **Dark mode** — toggle in the top-right of the tab bar. Choice persists to `localStorage`; defaults to the OS color scheme.
+- **Shipped detection** uses Etsy's `is_shipped` flag plus tracking-code presence (not `receipt.status`, which actually tracks payment state).
+- **Local SQLite cache** — orders cached 30 minutes, tracking 15 minutes. Survives restarts.
+- **Per-shop credentials** — each shop has its own Etsy app (keystring + shared secret) since they're owned by separate accounts. All stored in Windows Credential Manager.
 
 ---
 
@@ -33,18 +34,19 @@ Internal Tauri desktop app for managing orders across all 3 Etsy shops. Replaces
 
 ```
 src/
-  App.jsx                 # Tab shell (Fulfillment / Analytics)
-  fulfillment-view.jsx    # Order queue — filter pills, expandable rows
-  etsy-dashboard.jsx      # Analytics dashboard (placeholder)
+  App.jsx                 # Tab shell + dark mode toggle
+  theme.js                # CSS custom property palettes for light/dark
+  config.js               # Shop IDs + per-shop branding (color, name)
+  fulfillment-view.jsx    # Order queue — filter pills, expandable rows, tracking
+  etsy-dashboard.jsx      # Analytics (stat cards, revenue area chart, shop bars, top products)
   main.jsx                # React entry point
 
 src-tauri/
   Cargo.toml
-  build.rs
   tauri.conf.json
   src/
-    main.rs               # Tauri entry point — registers state + commands
-    etsy.rs               # Etsy OAuth 2.0 + PKCE, token management, order fetch
+    main.rs               # Tauri entry — registers state + commands
+    etsy.rs               # Per-shop OAuth 2.0 + PKCE, token mgmt, order fetch
     easypost.rs           # EasyPost tracking, in-memory + SQLite cache
     cache.rs              # SQLite cache layer (orders, tracking, shop sync)
 ```
@@ -54,10 +56,12 @@ src-tauri/
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 18+ (avoid v24 — incompatible with prebuilt Tauri CLI; use `cargo install tauri-cli --version "^1.0.0"` instead)
 - [Tauri CLI prerequisites for Windows](https://tauri.app/v1/guides/getting-started/prerequisites)
-- An [Etsy developer account](https://www.etsy.com/developers) with an app created
+- An [Etsy developer app](https://www.etsy.com/developers) **per shop** (each shop = separate Etsy account = separate app)
 - An [EasyPost account](https://www.easypost.com/) with an API key
+
+> **Important:** develop on a **local drive**, not a network mount. Network drives cause stale `.cargo-lock` files and slow incremental builds.
 
 ---
 
@@ -70,74 +74,70 @@ npm install
 git config core.hooksPath .githooks
 ```
 
-The second command activates the pre-commit hook that auto-bumps the patch version on every commit. Run it once after cloning — it's not automatic.
+The second command activates the pre-commit hook that auto-bumps the patch version on every commit.
 
-### 2. Configure API keys
+### 2. Register OAuth callback in each Etsy app
 
-On first launch, set your keys via the Tauri commands (call these once from the browser devtools console or wire up a settings UI):
+For each Etsy developer app (one per shop), add this callback URL:
 
-```js
-// Etsy app Keystring (from etsy.com/developers → your app → Keystring)
-await invoke("set_etsy_api_key", { apiKey: "your_etsy_keystring" })
-
-// EasyPost production API key
-await invoke("set_easypost_api_key", { apiKey: "your_easypost_key" })
+```
+http://localhost:7777/callback
 ```
 
-Keys are stored in **Windows Credential Manager** — you won't need to re-enter them after the first setup.
+Etsy v3 no longer accepts IP addresses (`127.0.0.1`), so we use the `localhost` hostname on a fixed port.
 
-For development, you can use environment variables instead:
+### 3. Run the app
 
 ```powershell
-$env:ETSY_API_KEY = "your_etsy_keystring"
-$env:EASYPOST_API_KEY = "your_easypost_key"
-```
-
-### 3. Connect your Etsy shops
-
-Call `etsy_connect` once per shop. This opens a browser tab for OAuth and waits for the redirect:
-
-```js
-await invoke("etsy_connect", { shopId: 12345678 })
-```
-
-Repeat for each of the 3 shops. Tokens are saved to Credential Manager and auto-refreshed.
-
-> **Etsy app redirect URI setting:** in your Etsy developer app, add `http://127.0.0.1` as an allowed redirect URI (Etsy permits wildcard ports for desktop apps).
-
----
-
-## Running
-
-```powershell
-# Development (Vite dev server + Rust hot reload)
 cargo tauri dev
-
-# Production build
-cargo tauri build
 ```
 
-The SQLite cache lives at `%APPDATA%\etsy-dashboard\cache.db`.
+First build is ~10 minutes (cold compile of ~440 Rust crates). Subsequent runs are seconds.
+
+### 4. Configure credentials (one-time, from DevTools console)
+
+Open DevTools with **F12**, then:
+
+```js
+const invoke = window.__TAURI__.tauri.invoke
+
+// Set EasyPost key (one global key for tracking lookups)
+await invoke("set_easypost_api_key", { apiKey: "EZ_..." })
+
+// Set per-shop Etsy credentials (keystring + shared secret from each app)
+await invoke("set_etsy_shop_credentials", {
+  shopId: 7438218,             // csdesigninc / Inspired Eclectics
+  apiKey: "keystring_here",
+  sharedSecret: "shared_secret_here"
+})
+
+await invoke("set_etsy_shop_credentials", {
+  shopId: 6807617,             // gkdesignhaus
+  apiKey: "keystring_here",
+  sharedSecret: "shared_secret_here"
+})
+
+// Connect each shop via OAuth (opens browser, log in as that shop's account, approve)
+await invoke("etsy_connect", { shopId: 7438218 })
+await invoke("etsy_connect", { shopId: 6807617 })
+```
+
+All credentials live in Windows Credential Manager. The dashboard auto-pulls on launch.
 
 ---
 
-## Wiring up live data
+## Etsy API specifics
 
-The fulfillment queue currently uses mock data. To switch to live Etsy orders:
+These cost us hours of debugging — documented here so they don't again:
 
-1. Replace `MOCK_ORDERS` in [`src/fulfillment-view.jsx`](src/fulfillment-view.jsx) with:
+- **`x-api-key` header format:** `keystring:shared_secret` (colon-separated). Not just the keystring, not just the secret.
+- **`receipt.status` is payment state**, not shipment state. Use `receipt.is_shipped` (boolean) for "did we ship this".
+- **Callback URL must be a hostname**, not an IP. `http://localhost:7777/callback` works; `http://127.0.0.1:7777` is rejected.
+- **Rate limits per app:** 5 QPS / 5K QPD. Our 30-min cache + 250ms inter-shop delay stay well under.
 
-```js
-const [orders, setOrders] = useState([]);
-useEffect(() => {
-  invoke("get_orders", { shopIds: [SHOP_ID_1, SHOP_ID_2, SHOP_ID_3] })
-    .then(setOrders);
-}, []);
-```
+---
 
-2. The `Order` shape from the Rust layer matches the mock data exactly — no transformation needed.
-
-### Etsy field mapping
+## Etsy field mapping
 
 | Frontend field | Etsy receipt field |
 |---|---|
@@ -147,9 +147,23 @@ useEffect(() => {
 | `details.hanging_holes` | `transactions[0].personalization` (parsed int) |
 | `details.special_instructions` | `receipt.message_from_buyer` |
 | `due_date` | `receipt.expected_ship_date` (Unix → ISO date) |
-| `shipped` / `postage_printed` | `receipt.status === "completed"` |
+| `total_price` | `receipt.grandtotal.amount / divisor` |
+| `tracking_code` | `receipt.shipments[0].tracking_code` |
+| `postage_printed` / `status: "completed"` | `receipt.is_shipped` OR tracking_code present |
 
-> Confirm the variation names "Finish" match your actual Etsy listing variation names before going live.
+---
+
+## Per-shop branding
+
+Each shop has a color used for both a 4px left-border stripe on every row and a solid pill near the order ID:
+
+| Shop | Color | Hex |
+|---|---|---|
+| Inspired Eclectics (csdesigninc) | Dark coffee brown | `#6F4E37` |
+| gkdesignhaus | Purple | `#5E3A8E` |
+| BitterChimp | Green | `#4A7C4A` |
+
+Defined in `src/config.js` → `SHOP_META`.
 
 ---
 
@@ -157,14 +171,38 @@ useEffect(() => {
 
 ```js
 // Check cache age per shop and row counts
-await invoke("cache_status", { shopIds: [123, 456, 789] })
+await invoke("cache_status", { shopIds: [7438218, 6807617] })
 
 // Force a fresh pull from Etsy on next get_orders call
 await invoke("clear_cache")
 
 // Or bypass cache for a single call
-await invoke("get_orders", { shopIds: [...], forceRefresh: true })
+await invoke("get_orders", { shopIds: [7438218, 6807617], forceRefresh: true })
 ```
+
+---
+
+## Running
+
+```powershell
+# Development (Vite dev server + Rust auto-rebuild on .rs save)
+cargo tauri dev
+
+# Production build (single .msi installer)
+cargo tauri build
+```
+
+The SQLite cache lives at `%APPDATA%\com.castshadow.etsy-dashboard\cache.db`.
+WebView2 user data at `%LOCALAPPDATA%\com.castshadow.etsy-dashboard\EBWebView`.
+
+---
+
+## Build pitfalls (don't repeat)
+
+- **Do not add `[profile.dev]` overrides or `.cargo/config.toml`** — every change invalidates the entire 440-crate cache.
+- **Do not use `lld-link`** — causes ntdll.dll access violations at runtime. Stay on the default MSVC linker even though it's slower.
+- **Do not develop on a network drive** — file locking semantics differ; `.cargo-lock` gets stuck.
+- **Do not kill `cargo tauri dev` mid-build** — leaves stale `.cargo-lock` files. If you do, delete `src-tauri/target/debug/.cargo-lock` before next run.
 
 ---
 
@@ -172,6 +210,7 @@ await invoke("get_orders", { shopIds: [...], forceRefresh: true })
 
 | Version | Date |
 |---|---|
+| v0.1.9 | 2026-05-27 |
 | v0.1.8 | 2026-05-26 |
 | v0.1.7 | 2026-05-26 |
 | v0.1.6 | 2026-05-26 |

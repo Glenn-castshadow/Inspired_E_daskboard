@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { SHOP_IDS } from "./config";
+import { SHOP_IDS, SHOP_META } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -199,12 +199,14 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
   const badge = dueBadge(order.due_date, order.status);
   const isShipped = order.status === "completed";
   const hasInstructions = order.details.special_instructions?.trim().length > 0;
+  const shop = SHOP_META[order.shop_id] || { name: `Shop ${order.shop_id}`, color: "#999" };
 
   return (
     <div style={{
-      background: isShipped ? "#fafaf8" : "#fff",
+      background: isShipped ? "var(--bg-muted)" : "var(--bg-surface)",
       border: "1px solid",
-      borderColor: isShipped ? "#ebebea" : "#e4e4e0",
+      borderColor: isShipped ? "var(--border-muted)" : "var(--border)",
+      borderLeft: `4px solid ${shop.color}`,
       borderRadius: 10,
       overflow: "hidden",
       opacity: isShipped ? 0.72 : 1,
@@ -230,7 +232,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
               fontFamily: "'Playfair Display', serif",
               fontSize: 14,
               fontWeight: 600,
-              color: isShipped ? "#888" : "#1a1a1a",
+              color: isShipped ? "var(--text-faint)" : "var(--text)",
             }}>
               {order.product_name}
             </span>
@@ -248,8 +250,18 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
               }}>NOTE</span>
             )}
           </div>
-          <div style={{ fontSize: 12, color: "#aaa", marginTop: 2, fontFamily: "'DM Sans', sans-serif" }}>
-            {order.id} · {order.buyer}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+            <span style={{
+              fontSize: 10, fontFamily: "'DM Sans', sans-serif", fontWeight: 600,
+              color: "#fff", background: shop.color,
+              padding: "2px 8px", borderRadius: 10, letterSpacing: "0.03em",
+              opacity: isShipped ? 0.65 : 1,
+            }}>
+              {shop.name}
+            </span>
+            <span style={{ fontSize: 12, color: "#aaa", fontFamily: "'DM Sans', sans-serif" }}>
+              {order.id} · {order.buyer}
+            </span>
           </div>
         </div>
 
@@ -302,7 +314,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
 
       {/* Expanded detail drawer */}
       {expanded && (
-        <div style={{ borderTop: "1px solid #f0efeb", background: "#fdfdfb" }}>
+        <div style={{ borderTop: "1px solid var(--border-muted)", background: "var(--bg-muted)" }}>
           <div style={{
             padding: "16px 20px 18px",
             display: "grid",
@@ -467,15 +479,16 @@ export default function FulfillmentView() {
   return (
     <div style={{
       minHeight: "100vh",
-      background: "#f7f7f5",
+      background: "var(--bg-canvas)",
       padding: "32px 40px",
       fontFamily: "'DM Sans', sans-serif",
+      color: "var(--text)",
     }}>
       {/* Header */}
       <div style={{ marginBottom: 28 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "#1a1a1a", letterSpacing: "-0.02em" }}>
-            Inspired Eclectics
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em" }}>
+            Genevieve Etsy Dashboard
           </div>
           <button
             onClick={() => loadOrders(true)}
@@ -511,14 +524,14 @@ export default function FulfillmentView() {
             borderRadius: 20,
             border: "1.5px solid",
             borderColor: filter === f.key
-              ? f.danger ? "#e74c3c" : f.warn ? "#f39c12" : "#2D6A4F"
-              : "#e0e0dc",
+              ? f.danger ? "#e74c3c" : f.warn ? "#f39c12" : "var(--accent)"
+              : "var(--border)",
             background: filter === f.key
-              ? f.danger ? "#fff1f0" : f.warn ? "#fff8ec" : "#f0faf4"
-              : "#fff",
+              ? f.danger ? "#fff1f0" : f.warn ? "#fff8ec" : "var(--accent-bg)"
+              : "var(--bg-surface)",
             color: filter === f.key
-              ? f.danger ? "#c0392b" : f.warn ? "#b7600a" : "#2D6A4F"
-              : "#888",
+              ? f.danger ? "#c0392b" : f.warn ? "#b7600a" : "var(--accent)"
+              : "var(--text-muted)",
             fontSize: 12,
             fontWeight: filter === f.key ? 600 : 400,
             fontFamily: "'DM Sans', sans-serif",

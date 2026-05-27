@@ -44,9 +44,11 @@ impl EasyPostState {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct EasyPostTracker {
+    #[allow(dead_code)]
     pub id: String,
     pub tracking_code: String,
     pub status: String, // "pre_transit" | "in_transit" | "out_for_delivery" | "delivered" | "return_to_sender" | "failure" | "unknown"
+    #[allow(dead_code)]
     pub status_detail: Option<String>,
     pub carrier: Option<String>,
     pub est_delivery_date: Option<String>, // ISO 8601

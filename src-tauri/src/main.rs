@@ -5,6 +5,8 @@ mod cache;
 mod easypost;
 mod etsy;
 
+use tauri::Manager;
+
 fn main() {
     tauri::Builder::default()
         .manage(easypost::EasyPostState::new())
@@ -29,7 +31,7 @@ fn main() {
             easypost::set_easypost_api_key,
             easypost::clear_tracking_cache,
             // Etsy orders
-            etsy::set_etsy_api_key,
+            etsy::set_etsy_shop_credentials,
             etsy::etsy_connect,
             etsy::get_orders,
             etsy::get_connected_shops,

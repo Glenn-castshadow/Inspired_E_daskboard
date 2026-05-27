@@ -4,8 +4,7 @@
 //
 // Setup:
 //   1. Create an Etsy app at etsy.com/developers and copy the Keystring (API key)
-//   2. Set the redirect URI in your Etsy app to: http://127.0.0.1:*/callback
-//      (Etsy allows wildcard port in redirect URIs for desktop apps)
+//   2. Add callback URL in your Etsy app: http://localhost:7777/callback
 //   3. Call set_etsy_api_key("your_keystring") once from the settings UI
 //   4. Call etsy_connect(shop_id) for each shop — opens browser for OAuth
 
@@ -15,7 +14,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -34,7 +33,7 @@ const KEYRING_SERVICE: &str = "etsy_dashboard";
 
 pub struct EtsyState {
     pub client: Client,
-    pub api_key: Mutex<Option<String>>,
+    pub shop_creds: Mutex<HashMap<u64, ShopCredentials>>,
     pub shop_tokens: Mutex<HashMap<u64, ShopTokens>>,
 }
 
@@ -42,14 +41,20 @@ impl EtsyState {
     pub fn new() -> Self {
         Self {
             client: Client::new(),
-            api_key: Mutex::new(None),
+            shop_creds: Mutex::new(HashMap::new()),
             shop_tokens: Mutex::new(HashMap::new()),
         }
     }
 }
 
 #[derive(Clone)]
-struct ShopTokens {
+pub(crate) struct ShopCredentials {
+    api_key: String,        // "Keystring" — the OAuth client_id
+    shared_secret: String,  // x-api-key value for API requests
+}
+
+#[derive(Clone)]
+pub(crate) struct ShopTokens {
     access_token: String,
     refresh_token: String,
     expires_at: i64, // Unix seconds
@@ -65,7 +70,9 @@ struct ReceiptsResponse {
 #[derive(Deserialize)]
 struct Receipt {
     receipt_id: u64,
-    status: String, // "open" | "completed" | "payment_processing" | "cancelled"
+    status: String, // "Paid" | "Completed" | "Open" | "Payment Processing" | "Canceled" — payment state, NOT shipment state
+    #[serde(default)]
+    is_shipped: bool, // true once a label is printed / shipment created
     name: String,
     message_from_buyer: Option<String>,
     create_timestamp: i64,
@@ -73,11 +80,18 @@ struct Receipt {
     transactions: Vec<Transaction>,
     #[serde(default)]
     shipments: Vec<Shipment>,
+    grandtotal: Option<Money>,
 }
 
 #[derive(Deserialize)]
 struct Shipment {
     tracking_code: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Money {
+    amount: i64,
+    divisor: i64,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +145,7 @@ pub struct Order {
     pub details: OrderDetails,
     pub buyer: String,
     pub shop_id: u64,
+    pub total_price: f64,
     pub tracking_code: Option<String>,
 }
 
@@ -226,22 +241,20 @@ fn delete_shop_tokens(shop_id: u64) {
 
 // ── API key resolution ────────────────────────────────────────────────────────
 
-async fn resolve_api_key(state: &EtsyState) -> Result<String, String> {
+async fn resolve_shop_creds(state: &EtsyState, shop_id: u64) -> Result<ShopCredentials, String> {
     {
-        let lock = state.api_key.lock().await;
-        if let Some(key) = &*lock {
-            return Ok(key.clone());
+        let lock = state.shop_creds.lock().await;
+        if let Some(c) = lock.get(&shop_id) {
+            return Ok(c.clone());
         }
     }
-    if let Some(key) = keyring_get("etsy_api_key") {
-        *state.api_key.lock().await = Some(key.clone());
-        return Ok(key);
-    }
-    if let Ok(key) = std::env::var("ETSY_API_KEY") {
-        *state.api_key.lock().await = Some(key.clone());
-        return Ok(key);
-    }
-    Err("Etsy API key not configured. Call set_etsy_api_key first.".to_string())
+    let api_key = keyring_get(&format!("shop_{}_api_key", shop_id))
+        .ok_or_else(|| format!("No API key configured for shop {}. Call set_etsy_shop_credentials first.", shop_id))?;
+    let shared_secret = keyring_get(&format!("shop_{}_shared_secret", shop_id))
+        .ok_or_else(|| format!("No shared secret configured for shop {}. Call set_etsy_shop_credentials first.", shop_id))?;
+    let creds = ShopCredentials { api_key, shared_secret };
+    state.shop_creds.lock().await.insert(shop_id, creds.clone());
+    Ok(creds)
 }
 
 // ── Token management ──────────────────────────────────────────────────────────
@@ -423,6 +436,10 @@ fn parse_hanging_holes(s: &str) -> Option<u32> {
 }
 
 fn normalize(receipt: Receipt, shop_id: u64) -> Order {
+    let total_price = receipt.grandtotal
+        .map(|m| if m.divisor == 0 { 0.0 } else { m.amount as f64 / m.divisor as f64 })
+        .unwrap_or(0.0);
+
     let tracking_code = receipt.shipments.first()
         .and_then(|s| s.tracking_code.as_deref())
         .filter(|t| !t.is_empty())
@@ -452,12 +469,13 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         .map(unix_to_iso_date)
         .unwrap_or_else(|| unix_to_iso_date(receipt.create_timestamp + 7 * 86400));
 
-    let status = if receipt.status == "completed" {
-        "completed".to_string()
-    } else {
-        "open".to_string()
-    };
-    let postage_printed = receipt.status == "completed";
+    // "Shipped" = a label has been printed (Etsy's is_shipped flag) OR there's a tracking code on the shipment.
+    // Etsy's receipt.status tracks PAYMENT state ("Paid", "Completed", "Canceled"), not shipment state.
+    let was_shipped = receipt.is_shipped
+        || receipt.status == "Completed"
+        || tracking_code.is_some();
+    let status = if was_shipped { "completed".to_string() } else { "open".to_string() };
+    let postage_printed = was_shipped;
     let receipt_id = receipt.receipt_id.to_string();
 
     Order {
@@ -472,6 +490,7 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         details: OrderDetails { hanging_holes, special_instructions },
         buyer: receipt.name,
         shop_id,
+        total_price,
         tracking_code,
     }
 }
@@ -481,6 +500,7 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
 async fn fetch_shop_orders(
     client: &Client,
     api_key: &str,
+    shared_secret: &str,
     access_token: &str,
     shop_id: u64,
 ) -> Result<Vec<Order>, String> {
@@ -490,9 +510,11 @@ async fn fetch_shop_orders(
         ETSY_API_BASE, shop_id
     );
 
+    // Etsy v3 API expects x-api-key in the format "keystring:shared_secret"
+    let x_api_key = format!("{}:{}", api_key, shared_secret);
     let resp = client
         .get(&url)
-        .header("x-api-key", api_key)
+        .header("x-api-key", x_api_key)
         .bearer_auth(access_token)
         .send()
         .await
@@ -510,14 +532,21 @@ async fn fetch_shop_orders(
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
 
-/// Store the Etsy app API key (the "Keystring" from etsy.com/developers).
+/// Store the Etsy app credentials (Keystring + Shared Secret) for a specific shop.
+/// Each shop is owned by a separate Etsy account with its own developer app.
 #[tauri::command]
-pub async fn set_etsy_api_key(
+pub async fn set_etsy_shop_credentials(
+    shop_id: u64,
     api_key: String,
+    shared_secret: String,
     state: State<'_, EtsyState>,
 ) -> Result<(), String> {
-    keyring_set("etsy_api_key", &api_key)?;
-    *state.api_key.lock().await = Some(api_key);
+    keyring_set(&format!("shop_{}_api_key", shop_id), &api_key)?;
+    keyring_set(&format!("shop_{}_shared_secret", shop_id), &shared_secret)?;
+    state.shop_creds.lock().await.insert(
+        shop_id,
+        ShopCredentials { api_key, shared_secret },
+    );
     Ok(())
 }
 
@@ -530,14 +559,14 @@ pub async fn etsy_connect(
     app_handle: tauri::AppHandle,
     state: State<'_, EtsyState>,
 ) -> Result<(), String> {
-    let api_key = resolve_api_key(&state).await?;
+    let creds = resolve_shop_creds(&state, shop_id).await?;
+    let api_key = creds.api_key;
 
     // Bind to a free port so the redirect URI is unique per auth attempt
-    let listener = TcpListener::bind("127.0.0.1:0")
+    let listener = TcpListener::bind("127.0.0.1:7777")
         .await
         .map_err(|e| format!("Could not open OAuth listener: {}", e))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let redirect_uri = format!("http://127.0.0.1:{}/callback", port);
+    let redirect_uri = "http://localhost:7777/callback".to_string();
 
     let verifier = random_string(64);
     let challenge = pkce_challenge(&verifier);
@@ -581,11 +610,11 @@ pub async fn get_orders(
     state: State<'_, EtsyState>,
     cache: State<'_, CacheDb>,
 ) -> Result<Vec<Order>, String> {
-    const ORDER_CACHE_MAX_AGE: i64 = 20 * 60; // 20 minutes
+    const ORDER_CACHE_MAX_AGE: i64 = 30 * 60; // 30 minutes — conservative; key is shared with another app
     let force = force_refresh.unwrap_or(false);
 
-    let api_key = resolve_api_key(&state).await?;
     let mut all_orders: Vec<Order> = Vec::new();
+    let mut fetched_count: u32 = 0;
 
     for shop_id in shop_ids {
         // Serve from cache if fresh enough
@@ -603,9 +632,30 @@ pub async fn get_orders(
             }
         }
 
-        // Cache miss or stale — fetch from Etsy
-        let token = get_valid_token(&state.client, &api_key, shop_id, &state).await?;
-        let orders = fetch_shop_orders(&state.client, &api_key, &token, shop_id).await?;
+        // Cache miss or stale — fetch from Etsy using per-shop credentials.
+        // Skip shops that aren't configured/connected yet so one missing shop
+        // doesn't break the whole dashboard.
+        let creds = match resolve_shop_creds(&state, shop_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Skipping shop {}: {}", shop_id, e);
+                continue;
+            }
+        };
+
+        // Stagger requests so each shop's QPS stays well under its 5/sec limit
+        if fetched_count > 0 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
+        fetched_count += 1;
+        let token = match get_valid_token(&state.client, &creds.api_key, shop_id, &state).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("Skipping shop {}: {}", shop_id, e);
+                continue;
+            }
+        };
+        let orders = fetch_shop_orders(&state.client, &creds.api_key, &creds.shared_secret, &token, shop_id).await?;
 
         let rows: Vec<(String, u64, String)> = orders
             .iter()
