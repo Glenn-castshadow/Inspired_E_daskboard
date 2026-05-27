@@ -7,6 +7,16 @@ import { SHOP_IDS } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
+// Decode HTML entities in Etsy-sourced strings (Etsy sometimes returns &quot;, &amp;, etc.)
+const decodeHtml = (() => {
+  const ta = typeof document !== "undefined" ? document.createElement("textarea") : null;
+  return (s) => {
+    if (!s || !ta) return s ?? "";
+    ta.innerHTML = s;
+    return ta.value;
+  };
+})();
+
 const SHOP_NAMES = {
   7438218:  "csdesigninc",
   22660031: "bitterchimp",
@@ -413,7 +423,7 @@ export default function EtsyDashboard({ theme = "light" }) {
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12, color: c.productRow, fontFamily: "'DM Sans', sans-serif", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {p.name}
+                        {decodeHtml(p.name)}
                       </div>
                       <div style={{ marginTop: 4, height: 3, background: c.productBar, borderRadius: 2, overflow: "hidden" }}>
                         <div style={{ height: "100%", width: `${(p.count / maxCount) * 100}%`, background: c.accent, borderRadius: 2, transition: "width 0.4s" }} />

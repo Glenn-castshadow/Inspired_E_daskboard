@@ -127,19 +127,41 @@ const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }
 const daysUntil = (dateStr) =>
   Math.round((parseDue(dateStr) - today) / 86400000);
 
-const dueBadge = (dateStr, status) => {
-  if (status === "completed") return { label: "Shipped",    bg: "#f0faf4", color: "#2D6A4F", dot: "#2D6A4F" };
+const dueBadge = (dateStr, status, isDark = false) => {
+  // In dark mode every badge inverts to solid color + white text so it pops on the dark canvas.
+  if (status === "completed") return isDark
+    ? { label: "Shipped",    bg: "#2D6A4F", color: "#fff",    dot: "#a3d9b8" }
+    : { label: "Shipped",    bg: "#f0faf4", color: "#2D6A4F", dot: "#2D6A4F" };
   const d = daysUntil(dateStr);
-  if (d < 0)   return { label: "Overdue",   bg: "#fff1f0", color: "#c0392b", dot: "#e74c3c" };
-  if (d === 0) return { label: "Due today", bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
-  if (d === 1) return { label: "Due tmrw",  bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
-  return       { label: `Due in ${d}d`,     bg: "#f4f4f0", color: "#666",    dot: "#bbb"    };
+  if (d < 0)   return isDark
+    ? { label: "Overdue",   bg: "#c0392b", color: "#fff",    dot: "#ff8a7e" }
+    : { label: "Overdue",   bg: "#fff1f0", color: "#c0392b", dot: "#e74c3c" };
+  if (d === 0) return isDark
+    ? { label: "Due today", bg: "#b7600a", color: "#fff",    dot: "#ffc170" }
+    : { label: "Due today", bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
+  if (d === 1) return isDark
+    ? { label: "Due tmrw",  bg: "#b7600a", color: "#fff",    dot: "#ffc170" }
+    : { label: "Due tmrw",  bg: "#fff8ec", color: "#b7600a", dot: "#f39c12" };
+  return         isDark
+    ? { label: `Due in ${d}d`, bg: "#3a3a37", color: "#e0ddd5", dot: "#888" }
+    : { label: `Due in ${d}d`, bg: "#f4f4f0", color: "#666",    dot: "#bbb" };
 };
 
 const fmtDate = (str) => {
   const [y, m, d] = str.split("-").map(Number);
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 };
+
+// Etsy returns some titles with HTML entities (&quot;, &amp;, &#39;, etc.).
+// Decode them by letting the browser parse them via a textarea.
+const decodeHtml = (() => {
+  const ta = typeof document !== "undefined" ? document.createElement("textarea") : null;
+  return (s) => {
+    if (!s || !ta) return s ?? "";
+    ta.innerHTML = s;
+    return ta.value;
+  };
+})();
 
 // ── Tracking helpers ──────────────────────────────────────────────────────────
 
@@ -191,12 +213,12 @@ function TrackingSection({ entry, code }) {
 }
 
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) {
+function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, isDark }) {
   useEffect(() => {
     if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
     onTrackingLoad(order.id, order.tracking_code);
   }, [expanded, trackingEntry, onTrackingLoad, order.id, order.tracking_code, order.postage_printed]);
-  const badge = dueBadge(order.due_date, order.status);
+  const badge = dueBadge(order.due_date, order.status, isDark);
   const isShipped = order.status === "completed";
   const hasInstructions = order.details.special_instructions?.trim().length > 0;
   const shop = SHOP_META[order.shop_id] || { name: `Shop ${order.shop_id}`, color: "#999" };
@@ -234,7 +256,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
               fontWeight: 600,
               color: isShipped ? "var(--text-faint)" : "var(--text)",
             }}>
-              {order.product_name}
+              {decodeHtml(order.product_name)}
             </span>
             {hasInstructions && !isShipped && (
               <span title="Has special instructions" style={{
@@ -260,14 +282,14 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
               {shop.name}
             </span>
             <span style={{ fontSize: 12, color: "#aaa", fontFamily: "'DM Sans', sans-serif" }}>
-              {order.id} · {order.buyer}
+              {order.id} · {decodeHtml(order.buyer)}
             </span>
           </div>
         </div>
 
         {/* Finish */}
-        <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: isShipped ? "#aaa" : "#444" }}>
-          {order.finish}
+        <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: isShipped ? "var(--text-faint)" : "var(--text)" }}>
+          {decodeHtml(order.finish)}
         </div>
 
         {/* Due date */}
@@ -330,7 +352,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad }) 
             />
             <DetailBlock
               label="Special Instructions"
-              value={order.details.special_instructions || "—"}
+              value={decodeHtml(order.details.special_instructions) || "—"}
               highlight={hasInstructions && !isShipped}
             />
           </div>
@@ -398,7 +420,8 @@ function ColHeader({ label }) {
 }
 
 // ── Main View ─────────────────────────────────────────────────────────────────
-export default function FulfillmentView() {
+export default function FulfillmentView({ theme = "light" }) {
+  const isDark = theme === "dark";
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -527,10 +550,14 @@ export default function FulfillmentView() {
               ? f.danger ? "#e74c3c" : f.warn ? "#f39c12" : "var(--accent)"
               : "var(--border)",
             background: filter === f.key
-              ? f.danger ? "#fff1f0" : f.warn ? "#fff8ec" : "var(--accent-bg)"
+              ? isDark
+                ? f.danger ? "#c0392b" : f.warn ? "#b7600a" : "var(--accent)"
+                : f.danger ? "#fff1f0" : f.warn ? "#fff8ec" : "var(--accent-bg)"
               : "var(--bg-surface)",
             color: filter === f.key
-              ? f.danger ? "#c0392b" : f.warn ? "#b7600a" : "var(--accent)"
+              ? isDark
+                ? "#fff"
+                : f.danger ? "#c0392b" : f.warn ? "#b7600a" : "var(--accent)"
               : "var(--text-muted)",
             fontSize: 12,
             fontWeight: filter === f.key ? 600 : 400,
@@ -611,6 +638,7 @@ export default function FulfillmentView() {
             onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
             trackingEntry={trackingCache[order.id]}
             onTrackingLoad={handleTrackingLoad}
+            isDark={isDark}
           />
         ))}
       </div>
