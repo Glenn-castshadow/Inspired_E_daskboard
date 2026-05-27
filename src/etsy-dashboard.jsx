@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
-  AreaChart, Area, BarChart, Bar,
+  AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { SHOP_IDS } from "./config";
+import { SHOP_IDS, SHOP_META } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -189,22 +189,32 @@ export default function EtsyDashboard({ theme = "light" }) {
     return () => clearInterval(interval);
   }, [loadOrders]);
 
+  // Shop focus — click a bar to drill into that shop, click again to clear
+  const [focusedShopId, setFocusedShopId] = useState(null);
+
   // ── Aggregations ────────────────────────────────────────────────────────────
 
+  // All aggregations except shopData run on the focused subset so the rest of
+  // the dashboard reflects the click. shopData stays full so you can click out.
+  const focusedOrders = useMemo(
+    () => focusedShopId == null ? orders : orders.filter(o => o.shop_id === focusedShopId),
+    [orders, focusedShopId]
+  );
+
   const stats = useMemo(() => {
-    if (!orders.length) return null;
+    if (!focusedOrders.length) return null;
     const now = new Date();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
       .toISOString().slice(0, 10);
-    const thisMonth = orders.filter(o => o.received_date >= monthStart);
+    const thisMonth = focusedOrders.filter(o => o.received_date >= monthStart);
     const revenue = thisMonth.reduce((s, o) => s + (o.total_price || 0), 0);
     return {
       ordersThisMonth: thisMonth.length,
       revenueThisMonth: revenue,
       avgOrderValue: thisMonth.length ? revenue / thisMonth.length : 0,
-      openOrders: orders.filter(o => o.status !== "completed").length,
+      openOrders: focusedOrders.filter(o => o.status !== "completed").length,
     };
-  }, [orders]);
+  }, [focusedOrders]);
 
   const timeSeriesData = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -212,17 +222,20 @@ export default function EtsyDashboard({ theme = "light" }) {
       const d = new Date(today); d.setDate(d.getDate() - (29 - i));
       const iso = d.toISOString().slice(0, 10);
       const label = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-      const dayOrders = orders.filter(o => o.received_date === iso);
+      const dayOrders = focusedOrders.filter(o => o.received_date === iso);
       return {
         date: label,
         revenue: Math.round(dayOrders.reduce((s, o) => s + (o.total_price || 0), 0) * 100) / 100,
         orders: dayOrders.length,
       };
     });
-  }, [orders]);
+  }, [focusedOrders]);
 
+  // shopData always shows ALL shops so the user can click between them.
+  // Includes shopId so the click handler knows which one to focus on.
   const shopData = useMemo(() =>
     SHOP_IDS.map(id => ({
+      shopId: id,
       name: SHOP_NAMES[id] || String(id),
       orders: orders.filter(o => o.shop_id === id).length,
       revenue: Math.round(orders.filter(o => o.shop_id === id)
@@ -232,7 +245,7 @@ export default function EtsyDashboard({ theme = "light" }) {
 
   const topProducts = useMemo(() => {
     const map = {};
-    orders.forEach(o => {
+    focusedOrders.forEach(o => {
       if (!map[o.product_name]) map[o.product_name] = { count: 0, revenue: 0 };
       map[o.product_name].count++;
       map[o.product_name].revenue += o.total_price || 0;
@@ -241,7 +254,7 @@ export default function EtsyDashboard({ theme = "light" }) {
       .map(([name, v]) => ({ name, count: v.count, revenue: Math.round(v.revenue * 100) / 100 }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
-  }, [orders]);
+  }, [focusedOrders]);
 
   const isLoading = loading && orders.length === 0;
 
@@ -286,9 +299,41 @@ export default function EtsyDashboard({ theme = "light" }) {
             {loading && orders.length > 0 ? "Updating…" : "Refresh"}
           </button>
         </div>
-        <div style={{ fontSize: 13, color: "#aaa", marginTop: 3 }}>
-          Sales analytics · all 3 shops
-          {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`}
+        <div style={{ fontSize: 13, color: "var(--text-faint)", marginTop: 3, display: "flex", alignItems: "center", gap: 10 }}>
+          {focusedShopId != null ? (
+            <>
+              <span>Focused on </span>
+              <span style={{
+                fontWeight: 600,
+                color: "#fff",
+                background: SHOP_META[focusedShopId]?.color || "#888",
+                padding: "2px 10px",
+                borderRadius: 10,
+                fontSize: 11,
+                letterSpacing: "0.03em",
+              }}>
+                {SHOP_META[focusedShopId]?.name || `Shop ${focusedShopId}`}
+              </span>
+              <button
+                onClick={() => setFocusedShopId(null)}
+                style={{
+                  fontSize: 11, fontFamily: "'DM Sans', sans-serif",
+                  color: "var(--text-muted)", background: "none",
+                  border: "1px solid var(--border)", borderRadius: 6,
+                  padding: "2px 8px", cursor: "pointer",
+                }}
+              >
+                clear ×
+              </button>
+            </>
+          ) : (
+            <span>Sales analytics · click a bar to focus on one shop</span>
+          )}
+          {lastUpdated && (
+            <span style={{ color: "var(--text-fainter)" }}>
+              · updated {lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+            </span>
+          )}
         </div>
       </div>
 
@@ -384,12 +429,30 @@ export default function EtsyDashboard({ theme = "light" }) {
               />
               <Tooltip
                 contentStyle={TOOLTIP_STYLE}
+                cursor={{ fill: "transparent" }}
                 formatter={(v, name, props) => [
                   `${v} orders · ${fmtRevenue(props.payload.revenue)}`,
                   "Shop"
                 ]}
               />
-              <Bar dataKey="orders" fill={c.accent} radius={[3, 3, 0, 0]} />
+              <Bar
+                dataKey="orders"
+                radius={[3, 3, 0, 0]}
+                cursor="pointer"
+                onClick={(d) => setFocusedShopId(prev => prev === d.shopId ? null : d.shopId)}
+              >
+                {shopData.map(entry => {
+                  const color = SHOP_META[entry.shopId]?.color || c.accent;
+                  const dim = focusedShopId != null && focusedShopId !== entry.shopId;
+                  return (
+                    <Cell
+                      key={entry.shopId}
+                      fill={color}
+                      fillOpacity={dim ? 0.25 : 1}
+                    />
+                  );
+                })}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </div>

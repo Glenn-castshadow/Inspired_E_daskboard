@@ -213,7 +213,7 @@ function TrackingSection({ entry, code }) {
 }
 
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, isDark }) {
+function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
   useEffect(() => {
     if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
     onTrackingLoad(order.id, order.tracking_code);
@@ -239,7 +239,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
         onClick={onToggle}
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 160px 130px 90px 36px",
+          gridTemplateColumns: "24px 52px 1fr 160px 130px 90px 36px",
           alignItems: "center",
           gap: 16,
           padding: "14px 20px",
@@ -247,6 +247,36 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
           userSelect: "none",
         }}
       >
+        {/* Selection checkbox */}
+        <div onClick={(e) => { e.stopPropagation(); onSelect(order.id); }} style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <input
+            type="checkbox"
+            checked={selected}
+            readOnly
+            style={{ width: 16, height: 16, accentColor: "var(--accent)", cursor: "pointer" }}
+          />
+        </div>
+
+        {/* Listing photo */}
+        <div style={{
+          width: 48, height: 48,
+          borderRadius: 6,
+          overflow: "hidden",
+          background: "var(--bg-muted)",
+          border: "1px solid var(--border-muted)",
+          flexShrink: 0,
+          opacity: isShipped ? 0.65 : 1,
+        }}>
+          {order.image_url ? (
+            <img
+              src={order.image_url}
+              alt=""
+              loading="lazy"
+              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            />
+          ) : null}
+        </div>
+
         {/* Product + buyer */}
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -358,7 +388,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
           </div>
           {isShipped && order.tracking_code && (
             <div style={{
-              borderTop: "1px solid #f0efeb",
+              borderTop: "1px solid var(--border-muted)",
               padding: "12px 20px 14px",
               display: "flex",
               flexDirection: "column",
@@ -369,12 +399,121 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
                 fontSize: 10,
                 textTransform: "uppercase",
                 letterSpacing: "0.09em",
-                color: "#bbb",
+                color: "var(--text-faint)",
                 marginBottom: 6,
               }}>Tracking</div>
               <TrackingSection entry={trackingEntry} code={order.tracking_code} />
             </div>
           )}
+          {!isShipped && (
+            <MarkShippedForm order={order} onShipped={onShipped} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Mark-as-shipped form ──────────────────────────────────────────────────────
+function MarkShippedForm({ order, onShipped }) {
+  const [code, setCode] = useState("");
+  const [carrier, setCarrier] = useState("USPS");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!code.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/tauri");
+      await invoke("create_receipt_shipment", {
+        shopId: order.shop_id,
+        receiptId: parseInt(order.receipt_id, 10),
+        trackingCode: code.trim(),
+        carrierName: carrier,
+        sendBcc: true,
+      });
+      setCode("");
+      onShipped?.();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        borderTop: "1px solid var(--border-muted)",
+        padding: "12px 20px 14px",
+        background: "var(--bg-muted)",
+      }}
+    >
+      <div style={{
+        fontFamily: "'DM Sans', sans-serif",
+        fontSize: 10,
+        textTransform: "uppercase",
+        letterSpacing: "0.09em",
+        color: "var(--text-faint)",
+        marginBottom: 8,
+      }}>Mark as shipped</div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+          placeholder="Tracking number"
+          disabled={submitting}
+          style={{
+            flex: 1, fontSize: 13, padding: "6px 10px",
+            fontFamily: "'DM Sans', sans-serif",
+            background: "var(--bg-surface)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            outline: "none",
+          }}
+        />
+        <select
+          value={carrier}
+          onChange={(e) => setCarrier(e.target.value)}
+          disabled={submitting}
+          style={{
+            fontSize: 13, padding: "6px 8px",
+            fontFamily: "'DM Sans', sans-serif",
+            background: "var(--bg-surface)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          <option>USPS</option>
+          <option>UPS</option>
+          <option>FedEx</option>
+          <option>DHL</option>
+          <option>Other</option>
+        </select>
+        <button
+          onClick={submit}
+          disabled={submitting || !code.trim()}
+          style={{
+            fontSize: 12, fontWeight: 600,
+            color: "#fff", background: code.trim() ? "var(--accent)" : "var(--border)",
+            border: "none", borderRadius: 6,
+            padding: "7px 16px", cursor: code.trim() && !submitting ? "pointer" : "default",
+            fontFamily: "'DM Sans', sans-serif",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {submitting ? "Sending…" : "Mark shipped"}
+        </button>
+      </div>
+      {error && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#c0392b", fontFamily: "'DM Sans', sans-serif" }}>
+          {error}
         </div>
       )}
     </div>
@@ -430,6 +569,17 @@ export default function FulfillmentView({ theme = "light" }) {
   const [expandedId, setExpandedId] = useState(null);
   const [trackingCache, setTrackingCache] = useState({});
   const fetchingTracking = useRef(new Set());
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [pickListOpen, setPickListOpen] = useState(false);
+
+  const toggleSelected = useCallback((id) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelected = () => setSelectedIds(new Set());
 
   const loadOrders = useCallback(async (forceRefresh = false) => {
     if (!isTauri) {
@@ -482,6 +632,7 @@ export default function FulfillmentView({ theme = "light" }) {
     if (filter === "shipped") list = list.filter(o => o.status === "completed");
     if (filter === "overdue") list = list.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0);
     if (filter === "notes")   list = list.filter(o => o.details.special_instructions?.trim().length > 0);
+    if (filter === "urgent")  list = list.filter(o => o.status !== "completed" && daysUntil(o.due_date) <= 1);
     list.sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
     return list;
   }, [filter, orders]);
@@ -490,6 +641,11 @@ export default function FulfillmentView({ theme = "light" }) {
   const overdueCount = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0).length;
   const notesCount   = orders.filter(o => o.details.special_instructions?.trim().length > 0).length;
   const shippedCount = orders.filter(o => o.status === "completed").length;
+
+  // Daily summary — urgent work for today
+  const dueTodayCount   = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) === 0).length;
+  const dueTmrwCount    = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) === 1).length;
+  const todayUrgentTotal = overdueCount + dueTodayCount + dueTmrwCount;
 
   const filters = [
     { key: "all",     label: "All",     count: orders.length },
@@ -533,11 +689,65 @@ export default function FulfillmentView({ theme = "light" }) {
             {loading && orders.length > 0 ? "Updating…" : "Refresh"}
           </button>
         </div>
-        <div style={{ fontSize: 13, color: "#aaa", marginTop: 3 }}>
+        <div style={{ fontSize: 13, color: "var(--text-faint)", marginTop: 3 }}>
           Order fulfillment queue · sorted by due date
           {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`}
         </div>
       </div>
+
+      {/* Daily summary banner — surfaces today's urgent work */}
+      {orders.length > 0 && (
+        <div
+          onClick={() => todayUrgentTotal > 0 && setFilter("urgent")}
+          style={{
+            marginBottom: 20,
+            padding: "14px 20px",
+            background: "var(--bg-surface)",
+            border: "1px solid var(--border)",
+            borderLeft: todayUrgentTotal > 0 ? "4px solid #e74c3c" : "4px solid var(--accent)",
+            borderRadius: 10,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            cursor: todayUrgentTotal > 0 ? "pointer" : "default",
+            transition: "border-color 0.15s",
+          }}
+        >
+          <div>
+            <div style={{
+              fontFamily: "'Playfair Display', serif",
+              fontSize: 18,
+              fontWeight: 600,
+              color: "var(--text)",
+              marginBottom: 4,
+            }}>
+              {todayUrgentTotal === 0
+                ? "All caught up — nothing urgent through tomorrow"
+                : `${todayUrgentTotal} order${todayUrgentTotal === 1 ? "" : "s"} need attention soon`}
+            </div>
+            {todayUrgentTotal > 0 && (
+              <div style={{ fontSize: 12, color: "var(--text-muted)", display: "flex", gap: 14, fontFamily: "'DM Sans', sans-serif" }}>
+                <span style={{ color: overdueCount > 0 ? "#c0392b" : "var(--text-faint)", fontWeight: overdueCount > 0 ? 600 : 400 }}>
+                  {overdueCount} overdue
+                </span>
+                <span style={{ color: "var(--text-faint)" }}>·</span>
+                <span style={{ color: dueTodayCount > 0 ? "#b7600a" : "var(--text-faint)", fontWeight: dueTodayCount > 0 ? 600 : 400 }}>
+                  {dueTodayCount} due today
+                </span>
+                <span style={{ color: "var(--text-faint)" }}>·</span>
+                <span style={{ color: dueTmrwCount > 0 ? "#b7600a" : "var(--text-faint)", fontWeight: dueTmrwCount > 0 ? 600 : 400 }}>
+                  {dueTmrwCount} due tomorrow
+                </span>
+              </div>
+            )}
+          </div>
+          {todayUrgentTotal > 0 && (
+            <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "'DM Sans', sans-serif" }}>
+              click to focus →
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Filter pills */}
       <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
@@ -588,11 +798,28 @@ export default function FulfillmentView({ theme = "light" }) {
       {/* Column headers */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "1fr 160px 130px 90px 36px",
+        gridTemplateColumns: "24px 52px 1fr 160px 130px 90px 36px",
         gap: 16,
         padding: "0 20px",
         marginBottom: 8,
+        alignItems: "center",
       }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <input
+            type="checkbox"
+            title={selectedIds.size > 0 ? "Clear selection" : "Select all visible"}
+            checked={filtered.length > 0 && filtered.every(o => selectedIds.has(o.id))}
+            onChange={() => {
+              if (filtered.every(o => selectedIds.has(o.id)) && filtered.length > 0) {
+                clearSelected();
+              } else {
+                setSelectedIds(new Set(filtered.map(o => o.id)));
+              }
+            }}
+            style={{ width: 14, height: 14, accentColor: "var(--accent)", cursor: "pointer" }}
+          />
+        </div>
+        <div />
         <ColHeader label="Product / Order" />
         <ColHeader label="Finish" />
         <ColHeader label="Due Date" />
@@ -639,8 +866,203 @@ export default function FulfillmentView({ theme = "light" }) {
             trackingEntry={trackingCache[order.id]}
             onTrackingLoad={handleTrackingLoad}
             isDark={isDark}
+            selected={selectedIds.has(order.id)}
+            onSelect={toggleSelected}
+            onShipped={() => loadOrders(true)}
           />
         ))}
+      </div>
+
+      {/* Floating selection bar — appears when ≥1 order checked */}
+      {selectedIds.size > 0 && !pickListOpen && (
+        <div style={{
+          position: "fixed",
+          right: 32,
+          bottom: 32,
+          background: "var(--bg-surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          padding: "12px 16px",
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+          zIndex: 100,
+          fontFamily: "'DM Sans', sans-serif",
+        }}>
+          <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>
+            {selectedIds.size} selected
+          </span>
+          <button
+            onClick={clearSelected}
+            style={{
+              fontSize: 12, color: "var(--text-muted)",
+              background: "none", border: "1px solid var(--border)",
+              borderRadius: 6, padding: "6px 10px", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >
+            Clear
+          </button>
+          <button
+            onClick={() => setPickListOpen(true)}
+            style={{
+              fontSize: 12, fontWeight: 600,
+              color: "#fff", background: "var(--accent)",
+              border: "none",
+              borderRadius: 6, padding: "6px 14px", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >
+            Print pick list →
+          </button>
+        </div>
+      )}
+
+      {/* Pick list modal — print-friendly */}
+      {pickListOpen && (
+        <PickList
+          orders={orders.filter(o => selectedIds.has(o.id))}
+          onClose={() => setPickListOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Pick list modal ──────────────────────────────────────────────────────────
+function PickList({ orders, onClose }) {
+  // Inject a print stylesheet so when the user hits Ctrl+P, only the pick list prints.
+  useEffect(() => {
+    const style = document.createElement("style");
+    style.id = "pick-list-print-style";
+    style.textContent = `
+      @media print {
+        body * { visibility: hidden !important; }
+        #pick-list-printable, #pick-list-printable * { visibility: visible !important; }
+        #pick-list-printable {
+          position: absolute !important;
+          left: 0 !important; top: 0 !important;
+          width: 100% !important; padding: 16px !important;
+          background: #fff !important; color: #000 !important;
+        }
+        .pick-list-noprint { display: none !important; }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => { document.getElementById("pick-list-print-style")?.remove(); };
+  }, []);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0,
+      background: "rgba(0,0,0,0.5)",
+      zIndex: 200,
+      display: "flex",
+      alignItems: "flex-start",
+      justifyContent: "center",
+      padding: "40px 20px",
+      overflowY: "auto",
+    }}>
+      <div style={{
+        background: "var(--bg-surface)",
+        color: "var(--text)",
+        borderRadius: 12,
+        width: "100%",
+        maxWidth: 820,
+        padding: "24px 32px",
+        boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+      }}>
+        {/* Modal toolbar — hidden in print */}
+        <div className="pick-list-noprint" style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 20,
+          paddingBottom: 16,
+          borderBottom: "1px solid var(--border)",
+        }}>
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700 }}>
+            Pick list ({orders.length})
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={onClose}
+              style={{
+                fontSize: 13, color: "var(--text-muted)",
+                background: "none", border: "1px solid var(--border)",
+                borderRadius: 6, padding: "8px 14px", cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              Close
+            </button>
+            <button
+              onClick={() => window.print()}
+              style={{
+                fontSize: 13, fontWeight: 600,
+                color: "#fff", background: "var(--accent)",
+                border: "none",
+                borderRadius: 6, padding: "8px 18px", cursor: "pointer",
+                fontFamily: "'DM Sans', sans-serif",
+              }}
+            >
+              Print
+            </button>
+          </div>
+        </div>
+
+        {/* Printable area */}
+        <div id="pick-list-printable">
+          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
+            Pick list
+          </div>
+          <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, marginBottom: 18, opacity: 0.7 }}>
+            {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+            {" · "}{orders.length} order{orders.length === 1 ? "" : "s"}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {orders.map(o => {
+              const shop = SHOP_META[o.shop_id] || { name: `Shop ${o.shop_id}`, color: "#999" };
+              const hh = o.details?.hanging_holes;
+              const notes = decodeHtml(o.details?.special_instructions || "");
+              return (
+                <div key={o.id} style={{
+                  display: "grid",
+                  gridTemplateColumns: "80px 1fr 110px",
+                  gap: 14,
+                  padding: "12px",
+                  border: "1px solid var(--border)",
+                  borderLeft: `4px solid ${shop.color}`,
+                  borderRadius: 8,
+                  pageBreakInside: "avoid",
+                }}>
+                  {o.image_url ? (
+                    <img src={o.image_url} alt="" style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 4, display: "block" }} />
+                  ) : (
+                    <div style={{ width: 80, height: 80, background: "var(--bg-muted)", borderRadius: 4 }} />
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
+                      {decodeHtml(o.product_name)}
+                    </div>
+                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, opacity: 0.75, marginBottom: 6 }}>
+                      {shop.name} · {o.id} · {decodeHtml(o.buyer)}
+                    </div>
+                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, lineHeight: 1.5 }}>
+                      {o.finish && <div><strong>Finish:</strong> {decodeHtml(o.finish)}</div>}
+                      {hh != null && <div><strong>Hanging holes:</strong> {hh === 0 ? "None" : `${hh} hole${hh > 1 ? "s" : ""}`}</div>}
+                      {notes && <div style={{ background: "#fffbea", color: "#7a5c00", padding: "4px 8px", borderRadius: 4, marginTop: 4, border: "1px solid #ffe58a" }}><strong>Note:</strong> {notes}</div>}
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, opacity: 0.7, textAlign: "right" }}>
+                    Due {fmtDate(o.due_date)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     </div>
   );

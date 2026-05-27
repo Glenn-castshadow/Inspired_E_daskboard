@@ -17,6 +17,25 @@ export default function App() {
     persistTheme(theme);
   }, [theme]);
 
+  // F12 toggles WebView2 devtools in release builds. The `devtools` feature on
+  // tauri enables them; this listener guarantees the keystroke routes through
+  // even when WebView2's built-in F12 binding doesn't fire.
+  useEffect(() => {
+    let devtoolsOpen = false;
+    const onKey = async (e) => {
+      if (e.key !== "F12") return;
+      e.preventDefault();
+      try {
+        const tauri = window.__TAURI__?.tauri;
+        if (!tauri) return;
+        await tauri.invoke(devtoolsOpen ? "close_devtools" : "open_devtools");
+        devtoolsOpen = !devtoolsOpen;
+      } catch {/* ignore */}
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
   const isDark = theme === "dark";
 

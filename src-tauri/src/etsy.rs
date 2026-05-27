@@ -25,7 +25,7 @@ use tokio::time::{timeout, Duration};
 const ETSY_AUTH_URL: &str = "https://www.etsy.com/oauth/connect";
 const ETSY_TOKEN_URL: &str = "https://api.etsy.com/v3/public/oauth/token";
 const ETSY_API_BASE: &str = "https://openapi.etsy.com/v3";
-const OAUTH_SCOPES: &str = "transactions_r listings_r";
+const OAUTH_SCOPES: &str = "transactions_r transactions_w listings_r";
 const OAUTH_TIMEOUT_SECS: u64 = 300; // 5 min for user to complete browser auth
 const KEYRING_SERVICE: &str = "etsy_dashboard";
 
@@ -98,8 +98,36 @@ struct Money {
 struct Transaction {
     title: String,
     #[serde(default)]
+    listing_id: u64,
+    #[serde(default)]
     variations: Vec<TransactionVariation>,
     personalization: Option<TransactionPersonalization>,
+    // Listing thumbnail — Etsy's schema for this varies; we try multiple paths.
+    // Etsy v3 OpenAPI lists it as image_listing; some endpoints return listing_image;
+    // when ?includes=Listings is used, it shows up nested under listing.images[0].
+    #[serde(default)]
+    image_listing: Option<ListingImage>,
+    #[serde(default)]
+    listing_image: Option<ListingImage>,
+    #[serde(default)]
+    listing: Option<TransactionListing>,
+}
+
+#[derive(Deserialize, Default)]
+struct TransactionListing {
+    #[serde(default)]
+    images: Vec<ListingImage>,
+}
+
+#[derive(Deserialize, Default)]
+struct ListingImage {
+    #[serde(default)]
+    url_75x75: Option<String>,
+    #[serde(default)]
+    url_170x135: Option<String>,
+    // Etsy uses capital N in the JSON field; rename to keep Rust snake_case happy
+    #[serde(default, rename = "url_570xN")]
+    url_570x_n: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -147,6 +175,12 @@ pub struct Order {
     pub shop_id: u64,
     pub total_price: f64,
     pub tracking_code: Option<String>,
+    pub image_url: Option<String>,
+    // Internal — kept to allow image enrichment in fetch_shop_orders.
+    // Skipped in serialization to avoid leaking to the frontend cache JSON in a
+    // breaking way; deserialization defaults to None for older cached blobs.
+    #[serde(skip_serializing, default)]
+    pub listing_id: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -451,6 +485,23 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
     let vars = txn.as_ref().map(|t| t.variations.as_slice()).unwrap_or(&[]);
     let finish = find_variation(vars, "Finish").map(str::to_string);
 
+    // Try every shape Etsy might use for the listing image:
+    //   transaction.image_listing
+    //   transaction.listing_image
+    //   transaction.listing.images[0]   (when ?includes=Listings)
+    let image_url = txn
+        .as_ref()
+        .and_then(|t| {
+            t.image_listing.as_ref()
+                .or(t.listing_image.as_ref())
+                .or_else(|| t.listing.as_ref().and_then(|l| l.images.first()))
+        })
+        .and_then(|img| {
+            img.url_170x135.clone()
+                .or_else(|| img.url_75x75.clone())
+                .or_else(|| img.url_570x_n.clone())
+        });
+
     // hanging_holes from the personalization field (e.g. "2 holes", "None")
     let hanging_holes = txn
         .as_ref()
@@ -492,6 +543,8 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         shop_id,
         total_price,
         tracking_code,
+        image_url,
+        listing_id: txn.as_ref().and_then(|t| if t.listing_id == 0 { None } else { Some(t.listing_id) }),
     }
 }
 
@@ -504,9 +557,10 @@ async fn fetch_shop_orders(
     access_token: &str,
     shop_id: u64,
 ) -> Result<Vec<Order>, String> {
-    // was_paid=true excludes abandoned carts; limit=100 covers most small shops
+    // was_paid=true excludes abandoned carts; limit=100 covers most small shops.
+    // includes=Listings expands each transaction's listing data (gives us image URLs).
     let url = format!(
-        "{}/application/shops/{}/receipts?limit=100&was_paid=true",
+        "{}/application/shops/{}/receipts?limit=100&was_paid=true&includes=Listings",
         ETSY_API_BASE, shop_id
     );
 
@@ -527,7 +581,95 @@ async fn fetch_shop_orders(
     }
 
     let body: ReceiptsResponse = resp.json().await.map_err(|e| e.to_string())?;
-    Ok(body.results.into_iter().map(|r| normalize(r, shop_id)).collect())
+    let mut orders: Vec<Order> = body.results.into_iter().map(|r| normalize(r, shop_id)).collect();
+
+    // The receipts endpoint doesn't reliably include listing images. Fetch them
+    // in one batched listings call and stitch them in. Image URLs survive in the
+    // SQLite order cache so this only runs on a real refresh.
+    let listing_ids: std::collections::HashSet<u64> = orders
+        .iter()
+        .filter(|o| o.image_url.is_none())
+        .filter_map(|o| o.listing_id)
+        .collect();
+    if !listing_ids.is_empty() {
+        let ids: Vec<u64> = listing_ids.into_iter().collect();
+        match fetch_listing_images(client, api_key, shared_secret, access_token, &ids).await {
+            Ok(map) => {
+                for order in orders.iter_mut() {
+                    if order.image_url.is_none() {
+                        if let Some(lid) = order.listing_id {
+                            if let Some(url) = map.get(&lid) {
+                                order.image_url = Some(url.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => eprintln!("Listing image fetch failed for shop {}: {}", shop_id, e),
+        }
+    }
+
+    Ok(orders)
+}
+
+#[derive(Deserialize)]
+struct ListingsBatchResponse {
+    results: Vec<ListingBatch>,
+}
+
+#[derive(Deserialize)]
+struct ListingBatch {
+    listing_id: u64,
+    #[serde(default)]
+    images: Vec<ListingImage>,
+}
+
+/// Batch-fetch listing images for a set of listing IDs. Returns listing_id → URL.
+async fn fetch_listing_images(
+    client: &Client,
+    api_key: &str,
+    shared_secret: &str,
+    access_token: &str,
+    listing_ids: &[u64],
+) -> Result<std::collections::HashMap<u64, String>, String> {
+    use std::collections::HashMap;
+    if listing_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // Etsy's listings/batch endpoint accepts up to 100 IDs at a time
+    let mut out: HashMap<u64, String> = HashMap::new();
+    let x_api_key = format!("{}:{}", api_key, shared_secret);
+    for chunk in listing_ids.chunks(100) {
+        let ids_param: String = chunk.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+        let url = format!(
+            "{}/application/listings/batch?listing_ids={}&includes=Images",
+            ETSY_API_BASE, ids_param
+        );
+        let resp = client
+            .get(&url)
+            .header("x-api-key", &x_api_key)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Listings batch HTTP {}: {}", status, body));
+        }
+        let body: ListingsBatchResponse = resp.json().await.map_err(|e| e.to_string())?;
+        for listing in body.results {
+            if let Some(url) = listing
+                .images
+                .into_iter()
+                .next()
+                .and_then(|img| img.url_170x135.or(img.url_75x75).or(img.url_570x_n))
+            {
+                out.insert(listing.listing_id, url);
+            }
+        }
+    }
+    Ok(out)
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
@@ -694,4 +836,249 @@ pub async fn disconnect_shop(
     delete_shop_tokens(shop_id);
     state.shop_tokens.lock().await.remove(&shop_id);
     Ok(())
+}
+
+/// POST tracking info to Etsy, which marks the receipt as shipped and emails the buyer.
+/// Etsy endpoint: POST /v3/application/shops/{shop_id}/receipts/{receipt_id}/tracking
+/// Requires the `transactions_w` OAuth scope — re-run etsy_connect if you authorized
+/// before this scope was added.
+#[tauri::command]
+pub async fn create_receipt_shipment(
+    shop_id: u64,
+    receipt_id: u64,
+    tracking_code: String,
+    carrier_name: Option<String>,
+    send_bcc: Option<bool>,
+    state: State<'_, EtsyState>,
+    cache: State<'_, CacheDb>,
+) -> Result<(), String> {
+    let creds = resolve_shop_creds(&state, shop_id).await?;
+    let token = get_valid_token(&state.client, &creds.api_key, shop_id, &state).await?;
+    let x_api_key = format!("{}:{}", creds.api_key, creds.shared_secret);
+    let url = format!(
+        "{}/application/shops/{}/receipts/{}/tracking",
+        ETSY_API_BASE, shop_id, receipt_id
+    );
+
+    let mut form: Vec<(&str, String)> = vec![("tracking_code", tracking_code.clone())];
+    if let Some(c) = carrier_name {
+        if !c.is_empty() { form.push(("carrier_name", c)); }
+    }
+    if let Some(b) = send_bcc {
+        form.push(("send_bcc", b.to_string()));
+    }
+
+    let resp = state.client
+        .post(&url)
+        .header("x-api-key", x_api_key)
+        .bearer_auth(token)
+        .form(&form)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        if status == 403 && body.contains("scope") {
+            return Err(format!(
+                "Insufficient OAuth scope. Re-run etsy_connect for shop {} so the new transactions_w scope is granted.",
+                shop_id
+            ));
+        }
+        return Err(format!("Etsy API HTTP {}: {}", status, body));
+    }
+
+    // Invalidate this shop's order cache so the next get_orders refetches with
+    // the shipped state baked in.
+    let _ = cache.clear_shop_orders(shop_id);
+    Ok(())
+}
+
+// ── Credentials export / import ───────────────────────────────────────────────
+//
+// File format (binary):
+//   [magic 4B "GETD"] [version 1B = 1] [salt 16B] [nonce 12B] [ciphertext...]
+//
+// Ciphertext is AES-256-GCM of the JSON below. Key is PBKDF2-HMAC-SHA256 of the
+// user's passphrase, 100k iterations, with the per-file salt.
+
+const BACKUP_MAGIC: &[u8; 4] = b"GETD";
+const BACKUP_VERSION: u8 = 1;
+const PBKDF2_ITERATIONS: u32 = 100_000;
+const SALT_LEN: usize = 16;
+const NONCE_LEN: usize = 12;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CredentialsBackup {
+    version: u32,
+    exported_at: i64,
+    // Older backups carry an EasyPost key — read for back-compat, never written.
+    #[serde(default)]
+    easypost_api_key: Option<String>,
+    // Newer backups carry USPS API credentials (Tracking 3.2 OAuth client).
+    #[serde(default)]
+    usps_client_id: Option<String>,
+    #[serde(default)]
+    usps_client_secret: Option<String>,
+    shops: std::collections::HashMap<u64, ShopBackup>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ShopBackup {
+    api_key: String,
+    shared_secret: String,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_at: Option<i64>,
+}
+
+fn derive_key(passphrase: &str, salt: &[u8]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(passphrase.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+    key
+}
+
+/// Export all stored credentials (EasyPost key + per-shop Etsy creds & OAuth tokens)
+/// to a passphrase-encrypted file. Pass the path you want the file written to.
+///
+/// shop_ids: which shops to include (typically your full SHOP_IDS list).
+#[tauri::command]
+pub async fn export_credentials(
+    shop_ids: Vec<u64>,
+    passphrase: String,
+    file_path: String,
+) -> Result<(), String> {
+    if passphrase.len() < 8 {
+        return Err("Passphrase must be at least 8 characters".to_string());
+    }
+
+    let usps_client_id = keyring_get("usps_client_id");
+    let usps_client_secret = keyring_get("usps_client_secret");
+
+    let mut shops = std::collections::HashMap::new();
+    for shop_id in shop_ids {
+        let api_key = keyring_get(&format!("shop_{}_api_key", shop_id));
+        let shared_secret = keyring_get(&format!("shop_{}_shared_secret", shop_id));
+        // Only include shops that actually have credentials set
+        if let (Some(api_key), Some(shared_secret)) = (api_key, shared_secret) {
+            let tokens = load_shop_tokens(shop_id);
+            shops.insert(shop_id, ShopBackup {
+                api_key,
+                shared_secret,
+                access_token: tokens.as_ref().map(|t| t.access_token.clone()),
+                refresh_token: tokens.as_ref().map(|t| t.refresh_token.clone()),
+                expires_at: tokens.as_ref().map(|t| t.expires_at),
+            });
+        }
+    }
+
+    let backup = CredentialsBackup {
+        version: 1,
+        exported_at: now_unix(),
+        easypost_api_key: None, // legacy field — no longer written
+        usps_client_id,
+        usps_client_secret,
+        shops,
+    };
+    let plaintext = serde_json::to_vec(&backup).map_err(|e| e.to_string())?;
+
+    use aes_gcm::{Aes256Gcm, KeyInit};
+    use aes_gcm::aead::Aead;
+    use rand::RngCore;
+
+    let mut rng = rand::thread_rng();
+    let mut salt = [0u8; SALT_LEN];
+    rng.fill_bytes(&mut salt);
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rng.fill_bytes(&mut nonce_bytes);
+
+    let key = derive_key(&passphrase, &salt);
+    let cipher = Aes256Gcm::new(&key.into());
+    let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let mut out = Vec::with_capacity(4 + 1 + SALT_LEN + NONCE_LEN + ciphertext.len());
+    out.extend_from_slice(BACKUP_MAGIC);
+    out.push(BACKUP_VERSION);
+    out.extend_from_slice(&salt);
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ciphertext);
+
+    std::fs::write(&file_path, &out).map_err(|e| format!("Could not write file: {}", e))?;
+    Ok(())
+}
+
+/// Import credentials from an encrypted file produced by export_credentials.
+/// Writes everything back into Windows Credential Manager.
+/// Returns the list of shop IDs that were imported.
+#[tauri::command]
+pub async fn import_credentials(
+    passphrase: String,
+    file_path: String,
+    state: State<'_, EtsyState>,
+) -> Result<Vec<u64>, String> {
+    let bytes = std::fs::read(&file_path).map_err(|e| format!("Could not read file: {}", e))?;
+
+    let header_len = 4 + 1 + SALT_LEN + NONCE_LEN;
+    if bytes.len() < header_len {
+        return Err("Backup file is too small or corrupted".to_string());
+    }
+    if &bytes[0..4] != BACKUP_MAGIC {
+        return Err("Not a Genevieve credentials backup file".to_string());
+    }
+    if bytes[4] != BACKUP_VERSION {
+        return Err(format!("Unsupported backup version: {}", bytes[4]));
+    }
+    let salt = &bytes[5..5 + SALT_LEN];
+    let nonce_bytes = &bytes[5 + SALT_LEN..5 + SALT_LEN + NONCE_LEN];
+    let ciphertext = &bytes[header_len..];
+
+    use aes_gcm::{Aes256Gcm, KeyInit};
+    use aes_gcm::aead::Aead;
+
+    let key = derive_key(&passphrase, salt);
+    let cipher = Aes256Gcm::new(&key.into());
+    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| "Decryption failed — wrong passphrase or corrupted file".to_string())?;
+
+    let backup: CredentialsBackup = serde_json::from_slice(&plaintext)
+        .map_err(|e| format!("Could not parse backup: {}", e))?;
+
+    // Write everything to keyring. Restore EasyPost too (back-compat with old backups).
+    if let Some(key) = &backup.easypost_api_key {
+        keyring_set("easypost_api_key", key)?;
+    }
+    if let Some(id) = &backup.usps_client_id {
+        keyring_set("usps_client_id", id)?;
+    }
+    if let Some(secret) = &backup.usps_client_secret {
+        keyring_set("usps_client_secret", secret)?;
+    }
+
+    let mut imported_ids = Vec::new();
+    for (shop_id, s) in backup.shops {
+        keyring_set(&format!("shop_{}_api_key", shop_id), &s.api_key)?;
+        keyring_set(&format!("shop_{}_shared_secret", shop_id), &s.shared_secret)?;
+        // Cache in memory state
+        state.shop_creds.lock().await.insert(
+            shop_id,
+            ShopCredentials { api_key: s.api_key, shared_secret: s.shared_secret },
+        );
+        // Restore OAuth tokens if present
+        if let (Some(access), Some(refresh), Some(expires)) = (s.access_token, s.refresh_token, s.expires_at) {
+            keyring_set(&format!("shop_{}_access", shop_id), &access)?;
+            keyring_set(&format!("shop_{}_refresh", shop_id), &refresh)?;
+            keyring_set(&format!("shop_{}_expires", shop_id), &expires.to_string())?;
+            state.shop_tokens.lock().await.insert(
+                shop_id,
+                ShopTokens { access_token: access, refresh_token: refresh, expires_at: expires },
+            );
+        }
+        imported_ids.push(shop_id);
+    }
+
+    Ok(imported_ids)
 }

@@ -9,24 +9,41 @@ const path = require("path");
 
 const root = path.resolve(__dirname, "..");
 
-// ── package.json ──────────────────────────────────────────────────────────────
-const pkgPath = path.join(root, "package.json");
+// ── Read all three current versions ───────────────────────────────────────────
+// Pick max(package.json, Cargo.toml, tauri.conf.json) before bumping so a drift
+// between files (e.g. a failed regex on CRLF endings) never silently regresses.
+const pkgPath   = path.join(root, "package.json");
+const cargoPath = path.join(root, "src-tauri", "Cargo.toml");
+const tauriPath = path.join(root, "src-tauri", "tauri.conf.json");
+
 const pkg     = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-const [maj, min, patch] = pkg.version.split(".").map(Number);
+let   cargo   = fs.readFileSync(cargoPath, "utf8");
+const tauri   = JSON.parse(fs.readFileSync(tauriPath, "utf8"));
+
+const cargoMatch = cargo.match(/^version = "([^"]+)"/m);
+if (!cargoMatch) {
+  console.error("bump-version: could not find [package] version in Cargo.toml");
+  process.exit(1);
+}
+
+const cmp = (a, b) => {
+  const A = a.split(".").map(Number), B = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (A[i] !== B[i]) return A[i] - B[i];
+  return 0;
+};
+const versions = [pkg.version, cargoMatch[1], tauri.package.version];
+const current  = versions.reduce((m, v) => cmp(v, m) > 0 ? v : m);
+const [maj, min, patch] = current.split(".").map(Number);
 const next = `${maj}.${min}.${patch + 1}`;
+
+// ── Write all three to `next` ─────────────────────────────────────────────────
 pkg.version = next;
 fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
-// ── src-tauri/Cargo.toml ──────────────────────────────────────────────────────
-const cargoPath = path.join(root, "src-tauri", "Cargo.toml");
-let cargo = fs.readFileSync(cargoPath, "utf8");
-// Only replace the version line inside [package], not dependency version specs
-cargo = cargo.replace(/^(version = )"[^"]*"$/m, `$1"${next}"`);
+// Use \r?\n-tolerant boundary so CRLF-ended files match too
+cargo = cargo.replace(/^(version = )"[^"]*"/m, `$1"${next}"`);
 fs.writeFileSync(cargoPath, cargo);
 
-// ── src-tauri/tauri.conf.json ─────────────────────────────────────────────────
-const tauriPath = path.join(root, "src-tauri", "tauri.conf.json");
-const tauri     = JSON.parse(fs.readFileSync(tauriPath, "utf8"));
 tauri.package.version = next;
 fs.writeFileSync(tauriPath, JSON.stringify(tauri, null, 2) + "\n");
 

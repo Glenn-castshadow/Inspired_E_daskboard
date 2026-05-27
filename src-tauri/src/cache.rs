@@ -175,6 +175,16 @@ impl CacheDb {
         Ok(())
     }
 
+    /// Clear cached orders for a single shop and reset its sync timestamp.
+    /// Used after a write (e.g. marking shipped) so the next get_orders re-pulls
+    /// fresh data for that shop only.
+    pub fn clear_shop_orders(&self, shop_id: u64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM orders WHERE shop_id = ?1", [shop_id]).map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM shop_sync WHERE shop_id = ?1", [shop_id]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn clear_tracking(&self) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM tracking", []).map_err(|e| e.to_string())?;

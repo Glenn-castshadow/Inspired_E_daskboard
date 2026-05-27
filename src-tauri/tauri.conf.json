@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "etsy-dashboard",
-    "version": "0.1.10"
+    "version": "0.1.18"
   },
   "tauri": {
     "allowlist": {

@@ -3,7 +3,7 @@
 Internal Tauri desktop app for managing orders across multiple Etsy shops. Replaces manual order tracking with a unified fulfillment queue and analytics view.
 
 **Platform:** Windows 11 only · Single operator · Not a public app
-**Current version:** v0.1.10
+**Current version:** v0.1.18
 
 ---
 
@@ -167,6 +167,38 @@ Defined in `src/config.js` → `SHOP_META`.
 
 ---
 
+## Migrating to a new PC
+
+Credentials live in Windows Credential Manager, which is per-user per-machine, so they don't sync automatically. Use the encrypted export/import commands to move everything in one file.
+
+**On the source PC** (with credentials already configured):
+
+```js
+const invoke = window.__TAURI__.tauri.invoke
+await invoke("export_credentials", {
+  shopIds: [7438218, 6807617, 22660031],   // every shop you want included
+  passphrase: "pick a strong passphrase",
+  filePath: "C:\\Users\\glenn\\Desktop\\genevieve-creds.bak"
+})
+```
+
+The file is AES-256-GCM encrypted with a PBKDF2-derived key (100k iterations, SHA-256). The file alone is useless without the passphrase. Copy it to the new PC (USB, encrypted cloud, whatever).
+
+**On the new PC** (after installing the dashboard):
+
+```js
+const invoke = window.__TAURI__.tauri.invoke
+await invoke("import_credentials", {
+  passphrase: "same passphrase as export",
+  filePath: "C:\\path\\to\\genevieve-creds.bak"
+})
+// Returns the array of imported shop IDs
+```
+
+EasyPost key + every shop's Etsy keystring, shared secret, and OAuth tokens all land in the new PC's Credential Manager. No browser OAuth re-auth needed — token refresh happens on the next API call.
+
+---
+
 ## Cache commands
 
 ```js
@@ -210,6 +242,13 @@ WebView2 user data at `%LOCALAPPDATA%\com.castshadow.etsy-dashboard\EBWebView`.
 
 | Version | Date |
 |---|---|
+| v0.1.18 | 2026-05-27 |
+| v0.1.16 | 2026-05-27 |
+| v0.1.15 | 2026-05-27 |
+| v0.1.14 | 2026-05-27 |
+| v0.1.13 | 2026-05-27 |
+| v0.1.12 | 2026-05-27 |
+| v0.1.11 | 2026-05-27 |
 | v0.1.10 | 2026-05-27 |
 | v0.1.9 | 2026-05-27 |
 | v0.1.8 | 2026-05-26 |

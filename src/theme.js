@@ -8,9 +8,9 @@ const LIGHT = {
   "--border":       "#e4e4e0",
   "--border-muted": "#ebebea",
   "--text":         "#1a1a1a",
-  "--text-muted":   "#666",
-  "--text-faint":   "#aaa",
-  "--text-fainter": "#ccc",
+  "--text-muted":   "#4d4d4d",   // 70% gray
+  "--text-faint":   "#808080",   // 50% gray
+  "--text-fainter": "#b3b3b3",   // 30% gray
   "--accent":       "#2D6A4F",   // primary green
   "--accent-bg":    "#f0faf4",
 };

@@ -1,6 +1,6 @@
 [package]
 name = "etsy-dashboard"
-version = "0.1.10"
+version = "0.1.18"
 edition = "2021"
 build = "build.rs"
 
@@ -8,7 +8,7 @@ build = "build.rs"
 tauri-build = { version = "1", features = [] }
 
 [dependencies]
-tauri = { version = "1", features = ["api-all"] }
+tauri = { version = "1", features = ["api-all", "devtools"] }
 
 # HTTP client — async, JSON support
 reqwest = { version = "0.11", features = ["json"] }
@@ -31,6 +31,16 @@ chrono = "0.4"
 
 # SQLite cache
 rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Credentials export/import — encrypted with passphrase
+aes-gcm = "0.10"
+pbkdf2 = "0.12"
+
+[features]
+# Required by `cargo tauri build` — propagates to tauri's custom-protocol feature
+# which is needed for production builds (loads frontend from bundled assets
+# instead of the dev server). Do not remove.
+custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 opt-level = "s"

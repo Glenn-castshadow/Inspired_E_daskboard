@@ -2,14 +2,28 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cache;
-mod easypost;
+// EasyPost integration retired in favor of free USPS Tracking 3.2 (see src/usps.rs).
+// The easypost.rs file remains in the repo for git history but is no longer compiled.
 mod etsy;
+mod usps;
 
 use tauri::Manager;
 
+/// Open WebView2 devtools on demand. Bound to F12 in the frontend so release
+/// builds can always reach the console for credential setup & debugging.
+#[tauri::command]
+fn open_devtools(window: tauri::Window) {
+    window.open_devtools();
+}
+
+#[tauri::command]
+fn close_devtools(window: tauri::Window) {
+    window.close_devtools();
+}
+
 fn main() {
     tauri::Builder::default()
-        .manage(easypost::EasyPostState::new())
+        .manage(usps::UspsState::new())
         .manage(etsy::EtsyState::new())
         .setup(|app| {
             let data_dir = app
@@ -24,21 +38,27 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // EasyPost tracking
-            easypost::get_tracking,
-            easypost::refresh_tracking,
-            easypost::refresh_all_tracking,
-            easypost::set_easypost_api_key,
-            easypost::clear_tracking_cache,
+            // Tracking (USPS Tracking 3.2 — free, OAuth 2.0)
+            usps::get_tracking,
+            usps::refresh_tracking,
+            usps::refresh_all_tracking,
+            usps::set_usps_credentials,
+            usps::clear_tracking_cache,
             // Etsy orders
             etsy::set_etsy_shop_credentials,
             etsy::etsy_connect,
             etsy::get_orders,
             etsy::get_connected_shops,
             etsy::disconnect_shop,
+            etsy::create_receipt_shipment,
+            etsy::export_credentials,
+            etsy::import_credentials,
             // Cache
             cache::cache_status,
             cache::clear_cache,
+            // Devtools
+            open_devtools,
+            close_devtools,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
