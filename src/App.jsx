@@ -1,11 +1,13 @@
 import { useState, useEffect } from "react";
 import FulfillmentView from "./fulfillment-view.jsx";
 import EtsyDashboard from "./etsy-dashboard.jsx";
+import MapView from "./map-tab/MapView.jsx";
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
 
 const TABS = [
   { key: "fulfillment", label: "Fulfillment" },
   { key: "analytics",   label: "Analytics"   },
+  { key: "map",         label: "Map"         },
 ];
 
 export default function App() {
@@ -109,6 +111,7 @@ export default function App() {
       {/* Active view */}
       {activeTab === "fulfillment" && <FulfillmentView theme={theme} />}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} />}
+      {activeTab === "map"         && <MapView />}
     </div>
   );
 }

@@ -81,6 +81,17 @@ struct Receipt {
     #[serde(default)]
     shipments: Vec<Shipment>,
     grandtotal: Option<Money>,
+    // Shipping address — feeds the Map tab's geocoding. All Optional because
+    // Etsy occasionally returns receipts (e.g. digital downloads) with no
+    // physical address.
+    #[serde(default)]
+    zip: Option<String>,
+    #[serde(default)]
+    state: Option<String>,
+    #[serde(default)]
+    city: Option<String>,
+    #[serde(default)]
+    country_iso: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +187,16 @@ pub struct Order {
     pub total_price: f64,
     pub tracking_code: Option<String>,
     pub image_url: Option<String>,
+    // Shipping destination — used by the Map tab. None for digital orders or
+    // older cached blobs that predate the schema (defaulted via serde).
+    #[serde(default)]
+    pub ship_zip: Option<String>,
+    #[serde(default)]
+    pub ship_state: Option<String>,
+    #[serde(default)]
+    pub ship_city: Option<String>,
+    #[serde(default)]
+    pub ship_country: Option<String>,
     // Internal — kept to allow image enrichment in fetch_shop_orders.
     // Skipped in serialization to avoid leaking to the frontend cache JSON in a
     // breaking way; deserialization defaults to None for older cached blobs.
@@ -544,6 +565,10 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         total_price,
         tracking_code,
         image_url,
+        ship_zip: receipt.zip,
+        ship_state: receipt.state,
+        ship_city: receipt.city,
+        ship_country: receipt.country_iso,
         listing_id: txn.as_ref().and_then(|t| if t.listing_id == 0 { None } else { Some(t.listing_id) }),
     }
 }

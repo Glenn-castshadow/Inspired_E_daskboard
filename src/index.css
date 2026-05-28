@@ -1,0 +1,7 @@
+/* Tailwind base/components/utilities — required for the Map tab's ported
+ * zipmap components. Everything else in this app uses inline styles driven
+ * by CSS custom properties (see theme.js), so this file is intentionally
+ * minimal. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
