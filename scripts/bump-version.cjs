@@ -31,7 +31,15 @@ const cmp = (a, b) => {
   for (let i = 0; i < 3; i++) if (A[i] !== B[i]) return A[i] - B[i];
   return 0;
 };
-const versions = [pkg.version, cargoMatch[1], tauri.package.version];
+// Tauri v1 nested version under `tauri.package.version`; v2 hoists it to the
+// top level. Read whichever exists so this script works across schema versions.
+const tauriVersion = tauri.version ?? tauri.package?.version;
+if (!tauriVersion) {
+  console.error("bump-version: could not find version in tauri.conf.json");
+  process.exit(1);
+}
+
+const versions = [pkg.version, cargoMatch[1], tauriVersion];
 const current  = versions.reduce((m, v) => cmp(v, m) > 0 ? v : m);
 const [maj, min, patch] = current.split(".").map(Number);
 const next = `${maj}.${min}.${patch + 1}`;
@@ -44,7 +52,11 @@ fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 cargo = cargo.replace(/^(version = )"[^"]*"/m, `$1"${next}"`);
 fs.writeFileSync(cargoPath, cargo);
 
-tauri.package.version = next;
+if ("version" in tauri) {
+  tauri.version = next;          // Tauri v2 schema
+} else {
+  tauri.package.version = next;  // Tauri v1 schema (legacy)
+}
 fs.writeFileSync(tauriPath, JSON.stringify(tauri, null, 2) + "\n");
 
 // ── README.md ─────────────────────────────────────────────────────────────────
