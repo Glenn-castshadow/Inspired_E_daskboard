@@ -426,7 +426,7 @@ function MarkShippedForm({ order, onShipped }) {
     setSubmitting(true);
     setError(null);
     try {
-      const { invoke } = await import("@tauri-apps/api/tauri");
+      const { invoke } = await import("@tauri-apps/api/core");
       await invoke("create_receipt_shipment", {
         shopId: order.shop_id,
         receiptId: parseInt(order.receipt_id, 10),
@@ -591,7 +591,7 @@ export default function FulfillmentView({ theme = "light" }) {
     setLoading(true);
     setError(null);
     try {
-      const { invoke } = await import("@tauri-apps/api/tauri");
+      const { invoke } = await import("@tauri-apps/api/core");
       const data = await invoke("get_orders", {
         shopIds: SHOP_IDS,
         forceRefresh: forceRefresh || undefined,
@@ -616,7 +616,7 @@ export default function FulfillmentView({ theme = "light" }) {
     fetchingTracking.current.add(orderId);
 
     const doFetch = isTauri
-      ? import("@tauri-apps/api/tauri").then(({ invoke }) =>
+      ? import("@tauri-apps/api/core").then(({ invoke }) =>
           invoke("get_tracking", { trackingNumber }))
       : Promise.reject("not in tauri");
 

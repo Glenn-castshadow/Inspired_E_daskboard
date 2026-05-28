@@ -169,7 +169,7 @@ export default function EtsyDashboard({ theme = "light" }) {
     setLoading(true);
     setError(null);
     try {
-      const { invoke } = await import("@tauri-apps/api/tauri");
+      const { invoke } = await import("@tauri-apps/api/core");
       const data = await invoke("get_orders", {
         shopIds: SHOP_IDS,
         forceRefresh: forceRefresh || undefined,

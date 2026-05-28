@@ -26,9 +26,10 @@ export default function App() {
       if (e.key !== "F12") return;
       e.preventDefault();
       try {
-        const tauri = window.__TAURI__?.tauri;
-        if (!tauri) return;
-        await tauri.invoke(devtoolsOpen ? "close_devtools" : "open_devtools");
+        // Tauri v2: invoke lives at window.__TAURI__.core.invoke (was .tauri in v1).
+        const core = window.__TAURI__?.core;
+        if (!core) return;
+        await core.invoke(devtoolsOpen ? "close_devtools" : "open_devtools");
         devtoolsOpen = !devtoolsOpen;
       } catch {/* ignore */}
     };

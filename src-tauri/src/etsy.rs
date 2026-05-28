@@ -14,7 +14,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use tauri::{Manager, State};
+use tauri::State;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -725,7 +725,11 @@ pub async fn etsy_connect(
         urlencode(&challenge),
     );
 
-    tauri::api::shell::open(&app_handle.shell_scope(), &auth_url, None)
+    // Tauri v2: open URL via tauri-plugin-shell (replaces v1's tauri::api::shell).
+    use tauri_plugin_shell::ShellExt;
+    app_handle
+        .shell()
+        .open(&auth_url, None)
         .map_err(|e| format!("Could not open browser: {}", e))?;
 
     let code = wait_for_callback(listener, &state_param).await?;

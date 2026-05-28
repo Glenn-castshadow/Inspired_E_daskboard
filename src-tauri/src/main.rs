@@ -12,22 +12,25 @@ use tauri::Manager;
 /// Open WebView2 devtools on demand. Bound to F12 in the frontend so release
 /// builds can always reach the console for credential setup & debugging.
 #[tauri::command]
-fn open_devtools(window: tauri::Window) {
+fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
 }
 
 #[tauri::command]
-fn close_devtools(window: tauri::Window) {
+fn close_devtools(window: tauri::WebviewWindow) {
     window.close_devtools();
 }
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .manage(usps::UspsState::new())
         .manage(etsy::EtsyState::new())
         .setup(|app| {
+            // Tauri v2: path resolver moved from app.path_resolver() to app.path()
+            // and returns Result instead of Option.
             let data_dir = app
-                .path_resolver()
+                .path()
                 .app_data_dir()
                 .expect("could not resolve app data directory");
             std::fs::create_dir_all(&data_dir)?;

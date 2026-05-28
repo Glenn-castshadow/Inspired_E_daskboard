@@ -8,6 +8,11 @@ src-tauri/target/
 
 # Tauri
 src-tauri/WixTools/
+# Tauri v2 auto-generates this directory from capabilities/ and config.
+src-tauri/gen/
+# Build logs from `npx tauri build`
+release-build.log
+build.log
 
 # Env / secrets
 .env
