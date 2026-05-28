@@ -4,6 +4,7 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import { SHOP_IDS, SHOP_META } from "./config";
+import AnalyticsHistory from "./analytics-history.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -503,6 +504,33 @@ export default function EtsyDashboard({ theme = "light" }) {
         </div>
 
       </div>
+
+      {/* All-time historical view — monthly revenue, top buyers, top products,
+          weekday breakdown. Rendered in a dark panel since the ported zipmap
+          components are Tailwind/dark-themed and would look out of place against
+          the light theme; the panel framing gives the section its own visual
+          identity below the recharts-driven current-month strip above. */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{
+          fontSize: 10,
+          textTransform: "uppercase",
+          letterSpacing: "0.09em",
+          color: "var(--text-faint)",
+          marginBottom: 12,
+          fontFamily: "'DM Sans', sans-serif",
+        }}>
+          All-time history
+        </div>
+        <div style={{
+          background: "#0f172a",
+          border: "1px solid var(--border)",
+          borderRadius: 10,
+          padding: 20,
+        }}>
+          <AnalyticsHistory orders={focusedOrders} />
+        </div>
+      </div>
+
     </div>
   );
 }
