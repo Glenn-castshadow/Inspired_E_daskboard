@@ -3,7 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { SHOP_META } from "./config";
+import { SHOP_META, SHOP_IDS } from "./config";
 import AnalyticsHistory from "./analytics-history.jsx";
 
 
@@ -307,7 +307,7 @@ export default function EtsyDashboard({ theme = "light", orders = [], loading = 
       {error && (
         <div style={{ marginBottom: 20, padding: "12px 16px", background: "#fff1f0", border: "1px solid #ffd0cc", borderRadius: 8, fontSize: 13, color: "#c0392b", fontFamily: "'DM Sans', sans-serif", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           {error}
-          <button onClick={() => loadOrders()} style={{ fontSize: 12, color: "#c0392b", background: "none", border: "1px solid #ffd0cc", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}>Retry</button>
+          <button onClick={() => onRefresh()} style={{ fontSize: 12, color: "#c0392b", background: "none", border: "1px solid #ffd0cc", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontFamily: "'DM Sans', sans-serif" }}>Retry</button>
         </div>
       )}
 
