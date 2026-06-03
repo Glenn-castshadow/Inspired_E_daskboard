@@ -185,8 +185,8 @@ export default function EtsyDashboard({ theme = "light" }) {
   }, []);
 
   useEffect(() => {
-    loadOrders();
-    const interval = setInterval(() => loadOrders(), 20 * 60 * 1000);
+    loadOrders(true);
+    const interval = setInterval(() => loadOrders(true), 20 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders]);
 
