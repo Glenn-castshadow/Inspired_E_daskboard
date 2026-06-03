@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import FulfillmentView, { MOCK_ORDERS } from "./fulfillment-view.jsx";
 import EtsyDashboard from "./etsy-dashboard.jsx";
 import MapView from "./map-tab/MapView.jsx";
+import InventoryTab from "./inventory-tab.jsx";
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
 import { SHOP_IDS } from "./config.js";
 
@@ -10,6 +11,7 @@ const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 const TABS = [
   { key: "fulfillment", label: "Fulfillment" },
   { key: "analytics",   label: "Analytics"   },
+  { key: "inventory",   label: "Inventory"   },
   { key: "map",         label: "Map"         },
 ];
 
@@ -150,6 +152,7 @@ export default function App() {
       {/* Active view */}
       {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
+      {activeTab === "inventory"   && <InventoryTab />}
       {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
     </div>
   );

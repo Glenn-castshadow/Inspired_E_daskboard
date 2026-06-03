@@ -21,7 +21,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -61,6 +61,19 @@ impl CacheDb {
                 CREATE TABLE IF NOT EXISTS shop_sync (
                     shop_id   INTEGER PRIMARY KEY,
                     synced_at INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS inventory (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_type   TEXT    NOT NULL DEFAULT 'blank',
+                    material    TEXT    NOT NULL,
+                    width       REAL    NOT NULL,
+                    height      REAL    NOT NULL,
+                    thickness   TEXT    NOT NULL DEFAULT '1/8',
+                    quantity    INTEGER NOT NULL DEFAULT 0,
+                    notes       TEXT    NOT NULL DEFAULT '',
+                    created_at  INTEGER NOT NULL,
+                    updated_at  INTEGER NOT NULL
                 );
 
                 PRAGMA user_version = {};
@@ -164,6 +177,95 @@ impl CacheDb {
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         )
         .ok()
+    }
+
+    // ── Inventory ─────────────────────────────────────────────────────────────
+
+    pub fn get_inventory(&self) -> Result<Vec<crate::inventory::InventoryItem>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, item_type, material, width, height, thickness, quantity, notes, created_at, updated_at
+             FROM inventory ORDER BY item_type, material, width DESC, height DESC"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::inventory::InventoryItem {
+                id:         row.get(0)?,
+                item_type:  row.get(1)?,
+                material:   row.get(2)?,
+                width:      row.get(3)?,
+                height:     row.get(4)?,
+                thickness:  row.get(5)?,
+                quantity:   row.get(6)?,
+                notes:      row.get(7)?,
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn add_inventory_item(&self, item: &crate::inventory::NewInventoryItem) -> Result<crate::inventory::InventoryItem, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_unix();
+        conn.execute(
+            "INSERT INTO inventory (item_type, material, width, height, thickness, quantity, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![item.item_type, item.material, item.width, item.height,
+                    item.thickness, item.quantity, item.notes, now],
+        ).map_err(|e| e.to_string())?;
+        let id = conn.last_insert_rowid();
+        Ok(crate::inventory::InventoryItem {
+            id,
+            item_type:  item.item_type.clone(),
+            material:   item.material.clone(),
+            width:      item.width,
+            height:     item.height,
+            thickness:  item.thickness.clone(),
+            quantity:   item.quantity,
+            notes:      item.notes.clone(),
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn set_inventory_qty(&self, id: i64, quantity: i32) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE inventory SET quantity = ?1, updated_at = ?2 WHERE id = ?3",
+            params![quantity, now_unix(), id],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 { Err(format!("inventory item {} not found", id)) } else { Ok(()) }
+    }
+
+    pub fn adjust_inventory_qty(&self, id: i64, delta: i32) -> Result<i32, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_unix();
+        conn.execute(
+            "UPDATE inventory SET quantity = MAX(0, quantity + ?1), updated_at = ?2 WHERE id = ?3",
+            params![delta, now, id],
+        ).map_err(|e| e.to_string())?;
+        let qty: i32 = conn.query_row(
+            "SELECT quantity FROM inventory WHERE id = ?1", params![id], |r| r.get(0)
+        ).map_err(|e| e.to_string())?;
+        Ok(qty)
+    }
+
+    pub fn update_inventory_item(&self, item: &crate::inventory::InventoryItem) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE inventory SET item_type=?1, material=?2, width=?3, height=?4,
+             thickness=?5, quantity=?6, notes=?7, updated_at=?8 WHERE id=?9",
+            params![item.item_type, item.material, item.width, item.height,
+                    item.thickness, item.quantity, item.notes, now_unix(), item.id],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 { Err(format!("inventory item {} not found", item.id)) } else { Ok(()) }
+    }
+
+    pub fn delete_inventory_item(&self, id: i64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM inventory WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     // ── Maintenance ───────────────────────────────────────────────────────────

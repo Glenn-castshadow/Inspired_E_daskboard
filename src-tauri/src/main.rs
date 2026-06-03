@@ -5,6 +5,7 @@ mod cache;
 // EasyPost integration retired in favor of free USPS Tracking 3.2 (see src/usps.rs).
 // The easypost.rs file remains in the repo for git history but is no longer compiled.
 mod etsy;
+mod inventory;
 mod usps;
 
 use tauri::Manager;
@@ -56,6 +57,13 @@ fn main() {
             etsy::create_receipt_shipment,
             etsy::export_credentials,
             etsy::import_credentials,
+            // Inventory
+            inventory::get_inventory,
+            inventory::add_inventory_item,
+            inventory::set_inventory_qty,
+            inventory::adjust_inventory_qty,
+            inventory::update_inventory_item,
+            inventory::delete_inventory_item,
             // Cache
             cache::cache_status,
             cache::clear_cache,
