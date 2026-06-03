@@ -22,9 +22,9 @@ function matMeta(id) { return MAT[id] ?? { id, label: id, color: "#777" }; }
 
 export const CATEGORIES = [
   { code: "SE",  label: "Special Edition"       },
-  { code: "AO",  label: "Architectural Ornaments" },
+  { code: "ORN", label: "Architectural Ornaments" },
   { code: "DBC", label: "Doorbell Chime Covers" },
-  { code: "WWP", label: "Wall & Window Panels"  },
+  { code: "WAL", label: "Wall & Window Panels"  },
   { code: "MPS", label: "Multi-Panel & Sets"    },
   { code: "LMP", label: "Lamps & Lighting"      },
   { code: "JWL", label: "Jewelry"               },
