@@ -1,8 +1,11 @@
-import { useState, useEffect } from "react";
-import FulfillmentView from "./fulfillment-view.jsx";
+import { useState, useEffect, useCallback } from "react";
+import FulfillmentView, { MOCK_ORDERS } from "./fulfillment-view.jsx";
 import EtsyDashboard from "./etsy-dashboard.jsx";
 import MapView from "./map-tab/MapView.jsx";
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
+import { SHOP_IDS } from "./config.js";
+
+const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
 const TABS = [
   { key: "fulfillment", label: "Fulfillment" },
@@ -13,6 +16,42 @@ const TABS = [
 export default function App() {
   const [activeTab, setActiveTab] = useState("fulfillment");
   const [theme, setTheme] = useState(getInitialTheme);
+
+  // ── Shared order state — fetched once, passed to all tabs ──────────────────
+  const [orders, setOrders] = useState([]);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [ordersError, setOrdersError] = useState(null);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const loadOrders = useCallback(async (forceRefresh = false) => {
+    if (!isTauri) {
+      setOrders(MOCK_ORDERS);
+      setOrdersLoading(false);
+      setLastUpdated(new Date());
+      return;
+    }
+    setOrdersLoading(true);
+    setOrdersError(null);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const data = await invoke("get_orders", {
+        shopIds: SHOP_IDS,
+        forceRefresh: forceRefresh || undefined,
+      });
+      setOrders(data);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setOrdersError(String(e));
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadOrders(true);
+    const interval = setInterval(() => loadOrders(true), 30 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [loadOrders]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -109,9 +148,9 @@ export default function App() {
       </div>
 
       {/* Active view */}
-      {activeTab === "fulfillment" && <FulfillmentView theme={theme} />}
-      {activeTab === "analytics"   && <EtsyDashboard theme={theme} />}
-      {activeTab === "map"         && <MapView />}
+      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
+      {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
+      {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
     </div>
   );
 }

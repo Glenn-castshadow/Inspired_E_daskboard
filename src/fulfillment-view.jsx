@@ -1,11 +1,11 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { SHOP_IDS, SHOP_META } from "./config";
+import { SHOP_META } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
 // ── Dev fallback (used when running outside the Tauri shell) ─────────────────
-const MOCK_ORDERS = [
+export const MOCK_ORDERS = [
   {
     id: "IE-4821",
     receipt_id: "4821",
@@ -574,12 +574,8 @@ function ColHeader({ label }) {
 }
 
 // ── Main View ─────────────────────────────────────────────────────────────────
-export default function FulfillmentView({ theme = "light" }) {
+export default function FulfillmentView({ theme = "light", orders = [], loading = false, error = null, lastUpdated = null, onRefresh }) {
   const isDark = theme === "dark";
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
   const [filter, setFilter] = useState("open");
   const [expandedId, setExpandedId] = useState(null);
   const [trackingCache, setTrackingCache] = useState({});
@@ -595,36 +591,6 @@ export default function FulfillmentView({ theme = "light" }) {
     });
   }, []);
   const clearSelected = () => setSelectedIds(new Set());
-
-  const loadOrders = useCallback(async (forceRefresh = false) => {
-    if (!isTauri) {
-      setOrders(MOCK_ORDERS);
-      setLoading(false);
-      setLastUpdated(new Date());
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const data = await invoke("get_orders", {
-        shopIds: SHOP_IDS,
-        forceRefresh: forceRefresh || undefined,
-      });
-      setOrders(data);
-      setLastUpdated(new Date());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOrders(true);
-    const interval = setInterval(() => loadOrders(true), 20 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
 
   const handleTrackingLoad = useCallback((orderId, trackingNumber) => {
     if (fetchingTracking.current.has(orderId)) return;
@@ -685,7 +651,7 @@ export default function FulfillmentView({ theme = "light" }) {
             Genevieve Etsy Dashboard
           </div>
           <button
-            onClick={() => loadOrders(true)}
+            onClick={() => onRefresh()}
             disabled={loading}
             style={{
               fontFamily: "'DM Sans', sans-serif",

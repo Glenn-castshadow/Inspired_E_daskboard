@@ -1,12 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useMemo } from "react";
 import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from "recharts";
-import { SHOP_IDS, SHOP_META } from "./config";
+import { SHOP_META } from "./config";
 import AnalyticsHistory from "./analytics-history.jsx";
 
-const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
 // Decode HTML entities in Etsy-sourced strings (Etsy sometimes returns &quot;, &amp;, etc.)
 const decodeHtml = (() => {
@@ -144,7 +143,7 @@ const CHART_PALETTE = {
 
 // ── Main View ─────────────────────────────────────────────────────────────────
 
-export default function EtsyDashboard({ theme = "light" }) {
+export default function EtsyDashboard({ theme = "light", orders = [], loading = false, error = null, lastUpdated = null, onRefresh }) {
   const c = CHART_PALETTE[theme] || CHART_PALETTE.light;
   const TOOLTIP_STYLE = {
     fontFamily: "'DM Sans', sans-serif",
@@ -155,40 +154,6 @@ export default function EtsyDashboard({ theme = "light" }) {
     borderRadius: 8,
     boxShadow: "0 2px 8px rgba(0,0,0,0.18)",
   };
-  const [orders, setOrders] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-
-  const loadOrders = useCallback(async (forceRefresh = false) => {
-    if (!isTauri) {
-      setOrders(MOCK_ORDERS);
-      setLoading(false);
-      setLastUpdated(new Date());
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const data = await invoke("get_orders", {
-        shopIds: SHOP_IDS,
-        forceRefresh: forceRefresh || undefined,
-      });
-      setOrders(data);
-      setLastUpdated(new Date());
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadOrders(true);
-    const interval = setInterval(() => loadOrders(true), 20 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
 
   // Shop focus — click a bar to drill into that shop, click again to clear
   const [focusedShopId, setFocusedShopId] = useState(null);
@@ -281,7 +246,7 @@ export default function EtsyDashboard({ theme = "light" }) {
             Genevieve Etsy Dashboard
           </div>
           <button
-            onClick={() => loadOrders(true)}
+            onClick={() => onRefresh()}
             disabled={loading}
             style={{
               fontFamily: "'DM Sans', sans-serif",

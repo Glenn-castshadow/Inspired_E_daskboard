@@ -6,11 +6,11 @@
 // state with a `get_orders` invoke. Stays Tailwind-styled to keep the
 // ported components verbatim — see src/index.css and tailwind.config.js.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { MapContainer, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
-import { SHOP_IDS, SHOP_META } from '../config';
+import { SHOP_IDS, SHOP_META } from '../config'; // SHOP_IDS still used for the shop filter UI
 
 import zipCentroids from './data/zipCentroids.json';
 import { styles } from './mapStyles/index.js';
@@ -39,7 +39,6 @@ for (const { zip, lat, lon, state, city } of zipCentroids) {
   zipCityLookup.set(zip, city);
 }
 
-const isTauri = typeof window !== 'undefined' && Boolean(window.__TAURI__);
 
 // Normalize an Etsy ship_zip into the 5-digit form our centroid table uses.
 // Handles ZIP+4 ("48124-1023"), 9-digit concat ("481241023"), and leading-zero
@@ -54,35 +53,7 @@ function normalizeZip(raw) {
   return five.padStart(5, '0');
 }
 
-export default function MapView() {
-  // ── Orders fetch ────────────────────────────────────────────────────────────
-  const [orders, setOrders]   = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState(null);
-
-  const loadOrders = useCallback(async (forceRefresh = false) => {
-    if (!isTauri) {
-      // No mock data on this tab — fulfillment-view's MOCK_ORDERS lack ship_zip
-      // so they'd produce an empty map anyway. Just show the empty state.
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      const data = await invoke('get_orders', {
-        shopIds: SHOP_IDS,
-        forceRefresh: forceRefresh || undefined,
-      });
-      setOrders(data);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { loadOrders(); }, [loadOrders]);
+export default function MapView({ orders = [], loading = false, error = null, onRefresh }) {
 
   // ── Map / globe controls ────────────────────────────────────────────────────
   const [activeStyleId, setActiveStyleId] = useState(styles[0].id);
@@ -249,7 +220,7 @@ export default function MapView() {
                 <p>{orders.length.toLocaleString()} order{orders.length !== 1 ? 's' : ''} loaded</p>
                 <p>{csvData.length.toLocaleString()} unique ZIP{csvData.length !== 1 ? 's' : ''}</p>
                 <button
-                  onClick={() => loadOrders(true)}
+                  onClick={() => onRefresh()}
                   className="self-start mt-1 text-blue-400 hover:text-blue-300 transition-colors"
                 >
                   ↻ Refresh from Etsy
