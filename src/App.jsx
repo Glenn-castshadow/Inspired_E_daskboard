@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import FulfillmentView, { MOCK_ORDERS } from "./fulfillment-view.jsx";
 import EtsyDashboard from "./etsy-dashboard.jsx";
 import MapView from "./map-tab/MapView.jsx";
@@ -20,20 +20,34 @@ export default function App() {
   const [theme, setTheme] = useState(getInitialTheme);
 
   // ── Shared order state — fetched once, passed to all tabs ──────────────────
-  const [orders, setOrders] = useState([]);
+  const [orders, setOrders]               = useState([]);
   const [ordersLoading, setOrdersLoading] = useState(true);
-  const [ordersError, setOrdersError] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
+  const [ordersRefreshing, setRefreshing] = useState(false);  // background refresh
+  const [ordersError, setOrdersError]     = useState(null);
+  const [lastUpdated, setLastUpdated]     = useState(null);
+
+  // Tracks whether we've shown data at least once — avoids blocking spinner
+  // on subsequent refreshes. Using a ref so loadOrders stays stable (no dep).
+  const hasDataRef = useRef(false);
 
   const loadOrders = useCallback(async (forceRefresh = false) => {
     if (!isTauri) {
       setOrders(MOCK_ORDERS);
       setOrdersLoading(false);
       setLastUpdated(new Date());
+      hasDataRef.current = true;
       return;
     }
-    setOrdersLoading(true);
+
+    // If we already have data, refresh silently in the background rather than
+    // blanking the UI with a loading spinner.
+    if (hasDataRef.current) {
+      setRefreshing(true);
+    } else {
+      setOrdersLoading(true);
+    }
     setOrdersError(null);
+
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const data = await invoke("get_orders", {
@@ -42,15 +56,19 @@ export default function App() {
       });
       setOrders(data);
       setLastUpdated(new Date());
+      hasDataRef.current = true;
     } catch (e) {
       setOrdersError(String(e));
     } finally {
       setOrdersLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    loadOrders(true);
+    // Phase 1: show cached data immediately (fast path — no Etsy API call)
+    // Phase 2: refresh from Etsy in the background, update silently when done
+    loadOrders(false).then(() => loadOrders(true));
     const interval = setInterval(() => loadOrders(true), 30 * 60 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders]);
@@ -123,12 +141,29 @@ export default function App() {
           </button>
         ))}
 
+        {/* Background refresh indicator */}
+        {ordersRefreshing && (
+          <span style={{
+            marginLeft: "auto",
+            marginBottom: 6,
+            fontFamily: "'DM Sans', sans-serif",
+            fontSize: 11,
+            color: "var(--text-faint)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+          }}>
+            <span style={{ display: "inline-block", animation: "spin 1s linear infinite", fontSize: 13 }}>↻</span>
+            Updating…
+          </span>
+        )}
+
         {/* Theme toggle — right-aligned */}
         <button
           onClick={toggleTheme}
           title={`Switch to ${isDark ? "light" : "dark"} mode`}
           style={{
-            marginLeft: "auto",
+            marginLeft: ordersRefreshing ? 10 : "auto",
             marginBottom: 6,
             padding: "6px 10px",
             background: "var(--bg-surface)",
