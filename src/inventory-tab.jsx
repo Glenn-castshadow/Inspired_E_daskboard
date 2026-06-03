@@ -21,15 +21,15 @@ function matMeta(id) { return MAT[id] ?? { id, label: id, color: "#777" }; }
 // ── SKU reference tables ──────────────────────────────────────────────────────
 
 export const CATEGORIES = [
-  { code: "DBC", label: "Door Bell Covers"     },
-  { code: "TCC", label: "Table / Candle Cloche" },
-  { code: "CLM", label: "Column / Pillar"       },
-  { code: "WWH", label: "Wind / Water Hanging"  },
-  { code: "WPL", label: "Wall Plaque"           },
-  { code: "ORN", label: "Ornament"              },
-  { code: "EAR", label: "Earrings"              },
-  { code: "CST", label: "Custom"                },
-  { code: "OTH", label: "Other"                 },
+  { code: "SE",  label: "Special Edition"       },
+  { code: "AO",  label: "Architectural Ornaments" },
+  { code: "DBC", label: "Doorbell Chime Covers" },
+  { code: "WWP", label: "Wall & Window Panels"  },
+  { code: "MPS", label: "Multi-Panel & Sets"    },
+  { code: "LMP", label: "Lamps & Lighting"      },
+  { code: "JWL", label: "Jewelry"               },
+  { code: "GI",  label: "Global Influences"     },
+  { code: "ACC", label: "Accessories"           },
 ];
 
 export const FINISHES = [
