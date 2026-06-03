@@ -33,22 +33,20 @@ export const CATEGORIES = [
 ];
 
 export const FINISHES = [
-  { code: "CU",  label: "Copper"        },
-  { code: "CL",  label: "Clear"         },
-  { code: "CPF", label: "Copper Foil"   },
-  { code: "CF",  label: "Copper Foil"   },
-  { code: "GL",  label: "Gold Leaf"     },
-  { code: "MP",  label: "Mirror Polish" },
-  { code: "CH",  label: "Charcoal"      },
-  { code: "WA",  label: "Walnut"        },
-  { code: "WO",  label: "White Oak"     },
-  { code: "AC",  label: "Acacia"        },
-  { code: "MH",  label: "Mahogany"      },
-  { code: "SP",  label: "Sapele"        },
-  { code: "BS",  label: "Black Stain"   },
-  { code: "NB",  label: "Natural / Black" },
-  { code: "SS",  label: "Silver / Steel" },
-  { code: "DR",  label: "Dark Rust"     },
+  { code: "CU",  label: "Copper"             },
+  { code: "CL",  label: "Copper Leaf"        },
+  { code: "CPF", label: "Copper Patina Foil" },
+  { code: "GL",  label: "Gold Leaf"          },
+  { code: "MA",  label: "Maple"              },
+  { code: "CH",  label: "Cherry"             },
+  { code: "WA",  label: "Walnut"             },
+  { code: "WO",  label: "White Oak"          },
+  { code: "AC",  label: "Aromatic Cedar"     },
+  { code: "MH",  label: "Mahogany"           },
+  { code: "SP",  label: "Sapele"             },
+  { code: "UB",  label: "Unfinished Birch"   },
+  { code: "UC",  label: "Unfinished Cherry"  },
+  { code: "MDF", label: "MDF"                },
 ];
 
 const CAT_MAP = Object.fromEntries(CATEGORIES.map(c => [c.code, c.label]));
