@@ -177,6 +177,10 @@ pub struct Order {
     pub receipt_id: String,
     pub product_name: String,
     pub finish: Option<String>,
+    #[serde(default)]
+    pub material: Option<String>,
+    #[serde(default)]
+    pub dimensions: Option<String>,
     pub due_date: String,      // "YYYY-MM-DD"
     pub received_date: String, // "YYYY-MM-DD"
     pub status: String,        // "open" | "completed"
@@ -505,6 +509,10 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
     let product_name = txn.as_ref().map(|t| t.title.clone()).unwrap_or_default();
     let vars = txn.as_ref().map(|t| t.variations.as_slice()).unwrap_or(&[]);
     let finish = find_variation(vars, "Finish").map(str::to_string);
+    let material = find_variation(vars, "Material").map(str::to_string);
+    let dimensions = find_variation(vars, "Size")
+        .or_else(|| find_variation(vars, "Dimensions"))
+        .map(str::to_string);
 
     // Try every shape Etsy might use for the listing image:
     //   transaction.image_listing
@@ -555,6 +563,8 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         receipt_id,
         product_name,
         finish,
+        material,
+        dimensions,
         due_date,
         received_date: unix_to_iso_date(receipt.create_timestamp),
         status,
@@ -606,7 +616,10 @@ async fn fetch_shop_orders(
     }
 
     let body: ReceiptsResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let mut orders: Vec<Order> = body.results.into_iter().map(|r| normalize(r, shop_id)).collect();
+    let mut orders: Vec<Order> = body.results.into_iter()
+        .filter(|r| r.status != "Canceled")
+        .map(|r| normalize(r, shop_id))
+        .collect();
 
     // The receipts endpoint doesn't reliably include listing images. Fetch them
     // in one batched listings call and stitch them in. Image URLs survive in the

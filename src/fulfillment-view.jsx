@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { SHOP_IDS, SHOP_META } from "./config";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
@@ -10,6 +11,8 @@ const MOCK_ORDERS = [
     receipt_id: "4821",
     product_name: "Driftwood Wall Hanging",
     finish: "Natural Seal",
+    material: "Driftwood",
+    dimensions: "24\" × 18\"",
     due_date: "2026-05-26",
     received_date: "2026-05-21",
     status: "open",
@@ -25,6 +28,8 @@ const MOCK_ORDERS = [
     receipt_id: "4819",
     product_name: "Reclaimed Wood Shelf",
     finish: "Dark Walnut Stain",
+    material: "Reclaimed Pine",
+    dimensions: "36\" × 8\"",
     due_date: "2026-05-27",
     received_date: "2026-05-20",
     status: "open",
@@ -40,6 +45,8 @@ const MOCK_ORDERS = [
     receipt_id: "4815",
     product_name: "Driftwood Wall Hanging",
     finish: "Whitewash",
+    material: "Driftwood",
+    dimensions: "18\" × 14\"",
     due_date: "2026-05-28",
     received_date: "2026-05-19",
     status: "open",
@@ -55,6 +62,8 @@ const MOCK_ORDERS = [
     receipt_id: "4810",
     product_name: "Ceramic Bud Vase Set",
     finish: "Matte White",
+    material: "Stoneware",
+    dimensions: "Set of 3",
     due_date: "2026-05-29",
     received_date: "2026-05-18",
     status: "open",
@@ -70,6 +79,8 @@ const MOCK_ORDERS = [
     receipt_id: "4804",
     product_name: "Woven Jute Table Runner",
     finish: "Natural",
+    material: "Jute",
+    dimensions: "72\" × 14\"",
     due_date: "2026-05-25",
     received_date: "2026-05-17",
     status: "completed",
@@ -86,6 +97,8 @@ const MOCK_ORDERS = [
     receipt_id: "4798",
     product_name: "Reclaimed Wood Shelf",
     finish: "Pale Oak",
+    material: "Reclaimed Pine",
+    dimensions: "48\" × 10\"",
     due_date: "2026-05-24",
     received_date: "2026-05-16",
     status: "completed",
@@ -102,6 +115,8 @@ const MOCK_ORDERS = [
     receipt_id: "4791",
     product_name: "Hand-Poured Soy Candle",
     finish: "Unscented / Linen Wick",
+    material: "Soy Wax",
+    dimensions: "8 oz",
     due_date: "2026-05-30",
     received_date: "2026-05-22",
     status: "open",
@@ -931,139 +946,247 @@ export default function FulfillmentView({ theme = "light" }) {
 }
 
 // ── Pick list modal ──────────────────────────────────────────────────────────
+const STAGES = [
+  { key: "cut",       label: "Cut"   },
+  { key: "assembled", label: "Asm"   },
+  { key: "packed",    label: "Packed" },
+];
+
+function StageBox({ checked, label, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+        cursor: "pointer", userSelect: "none",
+      }}
+    >
+      <div style={{
+        width: 18, height: 18,
+        border: `2px solid ${checked ? "var(--accent)" : "var(--border)"}`,
+        borderRadius: 4,
+        background: checked ? "var(--accent)" : "transparent",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        transition: "background 0.1s, border-color 0.1s",
+        WebkitPrintColorAdjust: "exact",
+        printColorAdjust: "exact",
+      }}>
+        {checked && (
+          <svg width="10" height="8" viewBox="0 0 10 8" fill="none">
+            <path d="M1 4l3 3 5-6" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        )}
+      </div>
+      <span style={{
+        fontSize: 9, fontFamily: "'DM Sans', sans-serif", fontWeight: 700,
+        letterSpacing: "0.04em",
+        color: checked ? "var(--accent)" : "var(--text-muted)",
+        textTransform: "uppercase",
+      }}>{label}</span>
+    </div>
+  );
+}
+
 function PickList({ orders, onClose }) {
-  // Inject a print stylesheet so when the user hits Ctrl+P, only the pick list prints.
+  const [stages, setStages] = useState(() =>
+    Object.fromEntries(orders.map(o => [o.id, { cut: false, assembled: false, packed: false }]))
+  );
+
+  const toggleStage = (id, key) =>
+    setStages(s => ({ ...s, [id]: { ...s[id], [key]: !s[id][key] } }));
+
+  // Portal div appended directly to <body> so print CSS can target it as a
+  // direct child — avoids the duplicate-page bug caused by visibility:hidden
+  // leaving the full dashboard layout in the print flow.
+  const [printRoot] = useState(() => {
+    const el = document.createElement("div");
+    el.id = "pick-list-print-portal";
+    document.body.appendChild(el);
+    return el;
+  });
+  useEffect(() => () => printRoot.remove(), [printRoot]);
+
   useEffect(() => {
     const style = document.createElement("style");
     style.id = "pick-list-print-style";
     style.textContent = `
+      #pick-list-print-portal { display: none; }
       @media print {
-        body * { visibility: hidden !important; }
-        #pick-list-printable, #pick-list-printable * { visibility: visible !important; }
-        #pick-list-printable {
-          position: absolute !important;
-          left: 0 !important; top: 0 !important;
-          width: 100% !important; padding: 16px !important;
-          background: #fff !important; color: #000 !important;
+        body > *:not(#pick-list-print-portal) { display: none !important; }
+        #pick-list-print-portal {
+          display: block !important;
+          padding: 16px;
+          background: #fff;
+          color: #000;
         }
-        .pick-list-noprint { display: none !important; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       }
     `;
     document.head.appendChild(style);
     return () => { document.getElementById("pick-list-print-style")?.remove(); };
   }, []);
 
-  return (
-    <div style={{
-      position: "fixed", inset: 0,
-      background: "rgba(0,0,0,0.5)",
-      zIndex: 200,
-      display: "flex",
-      alignItems: "flex-start",
-      justifyContent: "center",
-      padding: "40px 20px",
-      overflowY: "auto",
-    }}>
-      <div style={{
-        background: "var(--bg-surface)",
-        color: "var(--text)",
-        borderRadius: 12,
-        width: "100%",
-        maxWidth: 820,
-        padding: "24px 32px",
-        boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
-      }}>
-        {/* Modal toolbar — hidden in print */}
-        <div className="pick-list-noprint" style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 20,
-          paddingBottom: 16,
-          borderBottom: "1px solid var(--border)",
-        }}>
-          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700 }}>
-            Pick list ({orders.length})
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              onClick={onClose}
-              style={{
-                fontSize: 13, color: "var(--text-muted)",
-                background: "none", border: "1px solid var(--border)",
-                borderRadius: 6, padding: "8px 14px", cursor: "pointer",
-                fontFamily: "'DM Sans', sans-serif",
-              }}
-            >
-              Close
-            </button>
-            <button
-              onClick={() => window.print()}
-              style={{
-                fontSize: 13, fontWeight: 600,
-                color: "#fff", background: "var(--accent)",
-                border: "none",
-                borderRadius: 6, padding: "8px 18px", cursor: "pointer",
-                fontFamily: "'DM Sans', sans-serif",
-              }}
-            >
-              Print
-            </button>
-          </div>
-        </div>
+  // Rendered into both the modal (screen) and the body portal (print).
+  // Called as a function so each call produces an independent element tree.
+  const renderBody = () => (
+    <>
+      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
+        Pick list
+      </div>
+      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, marginBottom: 16, opacity: 0.7 }}>
+        {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+        {" · "}{orders.length} order{orders.length === 1 ? "" : "s"}
+      </div>
 
-        {/* Printable area */}
-        <div id="pick-list-printable">
-          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 700, marginBottom: 4 }}>
-            Pick list
-          </div>
-          <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, marginBottom: 18, opacity: 0.7 }}>
-            {new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
-            {" · "}{orders.length} order{orders.length === 1 ? "" : "s"}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {orders.map(o => {
-              const shop = SHOP_META[o.shop_id] || { name: `Shop ${o.shop_id}`, color: "#999" };
-              const hh = o.details?.hanging_holes;
-              const notes = decodeHtml(o.details?.special_instructions || "");
-              return (
-                <div key={o.id} style={{
-                  display: "grid",
-                  gridTemplateColumns: "80px 1fr 110px",
-                  gap: 14,
-                  padding: "12px",
-                  border: "1px solid var(--border)",
-                  borderLeft: `4px solid ${shop.color}`,
-                  borderRadius: 8,
-                  pageBreakInside: "avoid",
-                }}>
-                  {o.image_url ? (
-                    <img src={o.image_url} alt="" style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 4, display: "block" }} />
-                  ) : (
-                    <div style={{ width: 80, height: 80, background: "var(--bg-muted)", borderRadius: 4 }} />
-                  )}
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
-                      {decodeHtml(o.product_name)}
-                    </div>
-                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, opacity: 0.75, marginBottom: 6 }}>
-                      {shop.name} · {o.id} · {decodeHtml(o.buyer)}
-                    </div>
-                    <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, lineHeight: 1.5 }}>
-                      {o.finish && <div><strong>Finish:</strong> {decodeHtml(o.finish)}</div>}
-                      {hh != null && <div><strong>Hanging holes:</strong> {hh === 0 ? "None" : `${hh} hole${hh > 1 ? "s" : ""}`}</div>}
-                      {notes && <div style={{ background: "#fffbea", color: "#7a5c00", padding: "4px 8px", borderRadius: 4, marginTop: 4, border: "1px solid #ffe58a" }}><strong>Note:</strong> {notes}</div>}
-                    </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {orders.map(o => {
+          const shop = SHOP_META[o.shop_id] || { name: `Shop ${o.shop_id}`, color: "#999" };
+          const s = stages[o.id] || { cut: false, assembled: false, packed: false };
+          const notes = decodeHtml(o.details?.special_instructions || "");
+
+          // Build metadata chips — only include fields that have a value
+          const meta = [
+            o.buyer                          && { label: null,         value: decodeHtml(o.buyer),         bold: true  },
+            o.dimensions                     && { label: null,         value: decodeHtml(o.dimensions),    bold: false },
+            o.received_date                  && { label: "Ordered",    value: fmtDate(o.received_date),    bold: false },
+            o.due_date                       && { label: "Due",        value: fmtDate(o.due_date),         bold: true  },
+            (o.material || o.finish)         && { label: null,         value: [o.material && decodeHtml(o.material), o.finish && decodeHtml(o.finish)].filter(Boolean).join(" · "), bold: false },
+          ].filter(Boolean);
+
+          return (
+            <div key={o.id} style={{
+              border: "1px solid var(--border)",
+              borderLeft: `4px solid ${shop.color}`,
+              borderRadius: 8,
+              overflow: "hidden",
+              pageBreakInside: "avoid",
+            }}>
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "90px 64px 1fr",
+                gap: 12,
+                alignItems: "center",
+                padding: "12px 14px",
+              }}>
+                {/* Stage checkboxes */}
+                <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+                  {STAGES.map(({ key, label }) => (
+                    <StageBox
+                      key={key}
+                      checked={s[key]}
+                      label={label}
+                      onClick={() => toggleStage(o.id, key)}
+                    />
+                  ))}
+                </div>
+
+                {/* Listing photo */}
+                {o.image_url
+                  ? <img src={o.image_url} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4, display: "block" }} />
+                  : <div style={{ width: 64, height: 64, background: "var(--bg-muted)", borderRadius: 4 }} />
+                }
+
+                {/* Content: name on line 1, all metadata on line 2 */}
+                <div style={{ minWidth: 0 }}>
+                  <div style={{
+                    fontFamily: "'Playfair Display', serif",
+                    fontSize: 14, fontWeight: 700,
+                    lineHeight: 1.3,
+                    marginBottom: 5,
+                    wordBreak: "break-word",
+                  }}>
+                    {decodeHtml(o.product_name)}
                   </div>
-                  <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, opacity: 0.7, textAlign: "right" }}>
-                    Due {fmtDate(o.due_date)}
+                  <div style={{
+                    display: "flex", flexWrap: "wrap", alignItems: "center",
+                    gap: "4px 12px",
+                    fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                  }}>
+                    {meta.map((m, i) => (
+                      <span key={i} style={{ fontWeight: m.bold ? 700 : 400, opacity: m.bold ? 1 : 0.75, whiteSpace: "nowrap" }}>
+                        {m.label && <span style={{ opacity: 0.55, fontWeight: 400 }}>{m.label} </span>}
+                        {m.value}
+                      </span>
+                    ))}
+                    <span style={{ opacity: 0.35, fontSize: 10 }}>{o.id}</span>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+
+              {notes && (
+                <div style={{
+                  padding: "6px 14px 8px 18px",
+                  borderTop: "1px solid var(--border-muted)",
+                  background: "#fffbea",
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                  color: "#7a5c00",
+                }}>
+                  <strong>Note:</strong> {notes}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+
+  return (
+    <>
+      {/* Body-level portal — only used during print, hidden on screen */}
+      {createPortal(renderBody(), printRoot)}
+
+      {/* Modal */}
+      <div style={{
+        position: "fixed", inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        zIndex: 200,
+        display: "flex", alignItems: "flex-start", justifyContent: "center",
+        padding: "40px 20px",
+        overflowY: "auto",
+      }}>
+        <div style={{
+          background: "var(--bg-surface)",
+          color: "var(--text)",
+          borderRadius: 12,
+          width: "100%", maxWidth: 1020,
+          padding: "24px 32px",
+          boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+        }}>
+          {/* Toolbar */}
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+            marginBottom: 20, paddingBottom: 16, borderBottom: "1px solid var(--border)",
+          }}>
+            <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700 }}>
+              Pick list ({orders.length})
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={onClose}
+                style={{
+                  fontSize: 13, color: "var(--text-muted)",
+                  background: "none", border: "1px solid var(--border)",
+                  borderRadius: 6, padding: "8px 14px", cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >Close</button>
+              <button
+                onClick={() => window.print()}
+                style={{
+                  fontSize: 13, fontWeight: 600,
+                  color: "#fff", background: "var(--accent)",
+                  border: "none", borderRadius: 6, padding: "8px 18px", cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                }}
+              >Print</button>
+            </div>
           </div>
+
+          {/* Screen content */}
+          {renderBody()}
         </div>
       </div>
-    </div>
+    </>
   );
 }
