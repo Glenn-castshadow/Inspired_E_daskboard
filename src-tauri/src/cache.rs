@@ -7,8 +7,10 @@
 // This keeps the schema stable even as the domain types evolve, and lets
 // callers do all meaningful filtering in Rust rather than SQL.
 //
-// Schema lives entirely in init() — no migration framework needed at this
-// scale. If the schema changes, bump the user_version pragma and re-create.
+// Schema versioning uses stepped migrations: each version block is
+// idempotent (CREATE TABLE IF NOT EXISTS / ALTER TABLE … ADD COLUMN with
+// ignored-if-exists error) so upgrading from any earlier version works
+// correctly without re-creating tables that already have data.
 //
 // Thread safety: rusqlite::Connection is Send (not Sync). Wrapping it in
 // std::sync::Mutex gives us Send + Sync, which Tauri's State requires.
@@ -21,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -41,10 +43,10 @@ impl CacheDb {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
 
-        if version < SCHEMA_VERSION {
-            conn.execute_batch(&format!(
-                "
-                CREATE TABLE IF NOT EXISTS orders (
+        // ── v1 base schema ────────────────────────────────────────────────────
+        if version < 1 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS orders (
                     id         TEXT    PRIMARY KEY,
                     shop_id    INTEGER NOT NULL,
                     fetched_at INTEGER NOT NULL,
@@ -63,7 +65,15 @@ impl CacheDb {
                     synced_at INTEGER NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS inventory (
+                PRAGMA user_version = 1;",
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // ── v2: inventory table ───────────────────────────────────────────────
+        if version < 2 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS inventory (
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     item_type   TEXT    NOT NULL DEFAULT 'blank',
                     material    TEXT    NOT NULL,
@@ -76,10 +86,40 @@ impl CacheDb {
                     updated_at  INTEGER NOT NULL
                 );
 
-                PRAGMA user_version = {};
-                ",
-                SCHEMA_VERSION
-            ))
+                PRAGMA user_version = 2;",
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // ── v3: sku column on inventory + products catalog table ──────────────
+        if version < 3 {
+            // Add sku to existing inventory rows (ignore error if column already
+            // present — happens on a fresh install that skipped v2 directly).
+            let _ = conn.execute(
+                "ALTER TABLE inventory ADD COLUMN sku TEXT NOT NULL DEFAULT ''",
+                [],
+            );
+
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS products (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sku         TEXT    NOT NULL UNIQUE,
+                    name        TEXT    NOT NULL,
+                    category    TEXT    NOT NULL DEFAULT '',
+                    design      TEXT    NOT NULL DEFAULT '',
+                    finish      TEXT    NOT NULL DEFAULT '',
+                    width       REAL    NOT NULL DEFAULT 0,
+                    height      REAL    NOT NULL DEFAULT 0,
+                    thickness   TEXT    NOT NULL DEFAULT '1/8',
+                    material    TEXT    NOT NULL DEFAULT '',
+                    notes       TEXT    NOT NULL DEFAULT '',
+                    active      INTEGER NOT NULL DEFAULT 1,
+                    created_at  INTEGER NOT NULL,
+                    updated_at  INTEGER NOT NULL
+                );
+
+                PRAGMA user_version = 3;",
+            )
             .map_err(|e| e.to_string())?;
         }
 
@@ -184,7 +224,7 @@ impl CacheDb {
     pub fn get_inventory(&self) -> Result<Vec<crate::inventory::InventoryItem>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, item_type, material, width, height, thickness, quantity, notes, created_at, updated_at
+            "SELECT id, item_type, material, width, height, thickness, quantity, sku, notes, created_at, updated_at
              FROM inventory ORDER BY item_type, material, width DESC, height DESC"
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
@@ -196,9 +236,10 @@ impl CacheDb {
                 height:     row.get(4)?,
                 thickness:  row.get(5)?,
                 quantity:   row.get(6)?,
-                notes:      row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                sku:        row.get(7)?,
+                notes:      row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         }).map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
@@ -208,10 +249,10 @@ impl CacheDb {
         let conn = self.conn.lock().unwrap();
         let now = now_unix();
         conn.execute(
-            "INSERT INTO inventory (item_type, material, width, height, thickness, quantity, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            "INSERT INTO inventory (item_type, material, width, height, thickness, quantity, sku, notes, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
             params![item.item_type, item.material, item.width, item.height,
-                    item.thickness, item.quantity, item.notes, now],
+                    item.thickness, item.quantity, item.sku, item.notes, now],
         ).map_err(|e| e.to_string())?;
         let id = conn.last_insert_rowid();
         Ok(crate::inventory::InventoryItem {
@@ -222,6 +263,7 @@ impl CacheDb {
             height:     item.height,
             thickness:  item.thickness.clone(),
             quantity:   item.quantity,
+            sku:        item.sku.clone(),
             notes:      item.notes.clone(),
             created_at: now,
             updated_at: now,
@@ -254,9 +296,9 @@ impl CacheDb {
         let conn = self.conn.lock().unwrap();
         let rows = conn.execute(
             "UPDATE inventory SET item_type=?1, material=?2, width=?3, height=?4,
-             thickness=?5, quantity=?6, notes=?7, updated_at=?8 WHERE id=?9",
+             thickness=?5, quantity=?6, sku=?7, notes=?8, updated_at=?9 WHERE id=?10",
             params![item.item_type, item.material, item.width, item.height,
-                    item.thickness, item.quantity, item.notes, now_unix(), item.id],
+                    item.thickness, item.quantity, item.sku, item.notes, now_unix(), item.id],
         ).map_err(|e| e.to_string())?;
         if rows == 0 { Err(format!("inventory item {} not found", item.id)) } else { Ok(()) }
     }
@@ -265,6 +307,87 @@ impl CacheDb {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM inventory WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    // ── Products ──────────────────────────────────────────────────────────────
+
+    pub fn get_products(&self) -> Result<Vec<crate::catalog::Product>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, sku, name, category, design, finish, width, height,
+                    thickness, material, notes, active, created_at, updated_at
+             FROM products WHERE active = 1 ORDER BY category, sku"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::catalog::Product {
+                id:         row.get(0)?,
+                sku:        row.get(1)?,
+                name:       row.get(2)?,
+                category:   row.get(3)?,
+                design:     row.get(4)?,
+                finish:     row.get(5)?,
+                width:      row.get(6)?,
+                height:     row.get(7)?,
+                thickness:  row.get(8)?,
+                material:   row.get(9)?,
+                notes:      row.get(10)?,
+                active:     row.get::<_, i64>(11)? != 0,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn add_product(&self, p: &crate::catalog::NewProduct) -> Result<crate::catalog::Product, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_unix();
+        conn.execute(
+            "INSERT INTO products
+             (sku, name, category, design, finish, width, height, thickness, material, notes, active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)",
+            params![p.sku, p.name, p.category, p.design, p.finish,
+                    p.width, p.height, p.thickness, p.material, p.notes, now],
+        ).map_err(|e| e.to_string())?;
+        let id = conn.last_insert_rowid();
+        Ok(crate::catalog::Product {
+            id,
+            sku:        p.sku.clone(),
+            name:       p.name.clone(),
+            category:   p.category.clone(),
+            design:     p.design.clone(),
+            finish:     p.finish.clone(),
+            width:      p.width,
+            height:     p.height,
+            thickness:  p.thickness.clone(),
+            material:   p.material.clone(),
+            notes:      p.notes.clone(),
+            active:     true,
+            created_at: now,
+            updated_at: now,
+        })
+    }
+
+    pub fn update_product(&self, p: &crate::catalog::Product) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let rows = conn.execute(
+            "UPDATE products SET sku=?1, name=?2, category=?3, design=?4, finish=?5,
+             width=?6, height=?7, thickness=?8, material=?9, notes=?10, updated_at=?11
+             WHERE id=?12",
+            params![p.sku, p.name, p.category, p.design, p.finish,
+                    p.width, p.height, p.thickness, p.material, p.notes, now_unix(), p.id],
+        ).map_err(|e| e.to_string())?;
+        if rows == 0 { Err(format!("product {} not found", p.id)) } else { Ok(()) }
+    }
+
+    pub fn delete_product(&self, id: i64) -> Result<(), String> {
+        // Soft delete — set active = 0, preserve history
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE products SET active = 0, updated_at = ?1 WHERE id = ?2",
+            params![now_unix(), id],
+        ).map_err(|e| e.to_string())?;
         Ok(())
     }
 

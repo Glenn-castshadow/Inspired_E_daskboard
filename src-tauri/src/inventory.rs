@@ -13,7 +13,7 @@ use crate::cache::CacheDb;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct InventoryItem {
     pub id:         i64,
-    /// "sheet" | "blank" | "offcut"
+    /// "sheet" | "blank" | "finished" | "offcut"
     pub item_type:  String,
     /// e.g. "plywood", "raw_mdf", "copper_mdf", "gold_foil_mdf", "custom:..."
     pub material:   String,
@@ -22,6 +22,9 @@ pub struct InventoryItem {
     /// "1/8" | "1/4"
     pub thickness:  String,
     pub quantity:   i32,
+    /// SKU from the product catalog — set on blanks and finished pieces.
+    /// Empty string means untagged.
+    pub sku:        String,
     pub notes:      String,
     pub created_at: i64,   // unix
     pub updated_at: i64,   // unix
@@ -35,6 +38,7 @@ pub struct NewInventoryItem {
     pub height:     f64,
     pub thickness:  String,
     pub quantity:   i32,
+    pub sku:        String,
     pub notes:      String,
 }
 

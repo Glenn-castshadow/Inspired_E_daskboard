@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod cache;
+mod catalog;
 // EasyPost integration retired in favor of free USPS Tracking 3.2 (see src/usps.rs).
 // The easypost.rs file remains in the repo for git history but is no longer compiled.
 mod etsy;
@@ -64,6 +65,11 @@ fn main() {
             inventory::adjust_inventory_qty,
             inventory::update_inventory_item,
             inventory::delete_inventory_item,
+            // Product catalog
+            catalog::get_products,
+            catalog::add_product,
+            catalog::update_product,
+            catalog::delete_product,
             // Cache
             cache::cache_status,
             cache::clear_cache,
