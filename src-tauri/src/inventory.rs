@@ -1,12 +1,18 @@
 // src-tauri/src/inventory.rs
 //
 // Material inventory — flat laser sheet goods (plywood, MDF, prepared blanks,
-// offcuts). Persistent in the same SQLite DB as orders (cache.rs owns the
-// schema and low-level methods; this file owns the types and Tauri commands).
+// finished pieces, offcuts). Persistent in either:
+//   a) The shared inventory HTTP server (when settings.inventory_server_url is set)
+//   b) The local SQLite DB in cache.rs (fallback / offline mode)
+//
+// When the server URL is configured both machines (Glenn's and Genevieve's)
+// read/write the same data. The server runs as a Docker container — initially
+// on Glenn's machine, eventually on the Synology NAS.
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
 use crate::cache::CacheDb;
+use crate::settings::AppSettings;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,7 +36,7 @@ pub struct InventoryItem {
     pub updated_at: i64,   // unix
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct NewInventoryItem {
     pub item_type:  String,
     pub material:   String,
@@ -42,56 +48,176 @@ pub struct NewInventoryItem {
     pub notes:      String,
 }
 
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+pub(crate) async fn http_get<T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+) -> Result<T, String> {
+    let resp = http.get(url).bearer_auth(api_key).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, body));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn http_post<B: Serialize, T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &B,
+) -> Result<T, String> {
+    let resp = http.post(url).bearer_auth(api_key).json(body).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, b));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn http_put<B: Serialize>(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &B,
+) -> Result<(), String> {
+    let resp = http.put(url).bearer_auth(api_key).json(body).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, b));
+    }
+    Ok(())
+}
+
+pub(crate) async fn http_patch<B: Serialize, T: serde::de::DeserializeOwned>(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &B,
+) -> Result<T, String> {
+    let resp = http.patch(url).bearer_auth(api_key).json(body).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, b));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
+pub(crate) async fn http_delete(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+) -> Result<(), String> {
+    let resp = http.delete(url).bearer_auth(api_key).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, b));
+    }
+    Ok(())
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn get_inventory(cache: State<'_, CacheDb>) -> Result<Vec<InventoryItem>, String> {
-    cache.get_inventory()
+pub async fn get_inventory(
+    cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
+) -> Result<Vec<InventoryItem>, String> {
+    if let Some(base) = settings.server_url() {
+        http_get(&http, &format!("{}/inventory", base), &settings.api_key()).await
+    } else {
+        cache.get_inventory()
+    }
 }
 
 #[tauri::command]
-pub fn add_inventory_item(
+pub async fn add_inventory_item(
     item: NewInventoryItem,
     cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
 ) -> Result<InventoryItem, String> {
-    cache.add_inventory_item(&item)
+    if let Some(base) = settings.server_url() {
+        http_post(&http, &format!("{}/inventory", base), &settings.api_key(), &item).await
+    } else {
+        cache.add_inventory_item(&item)
+    }
 }
 
 /// Overwrite quantity for a single item (used by the bulk reconcile / direct
 /// type-in flow).
 #[tauri::command]
-pub fn set_inventory_qty(
+pub async fn set_inventory_qty(
     id: i64,
     quantity: i32,
     cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
 ) -> Result<(), String> {
-    cache.set_inventory_qty(id, quantity.max(0))
+    if let Some(base) = settings.server_url() {
+        http_put(&http, &format!("{}/inventory/{}/qty", base, id), &settings.api_key(), &serde_json::json!({ "quantity": quantity.max(0) })).await
+    } else {
+        cache.set_inventory_qty(id, quantity.max(0))
+    }
 }
 
 /// Increment or decrement by `delta` (pass −1 or +1). Quantity floors at 0.
 /// Returns the new quantity so the frontend can update without a full reload.
 #[tauri::command]
-pub fn adjust_inventory_qty(
+pub async fn adjust_inventory_qty(
     id: i64,
     delta: i32,
     cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
 ) -> Result<i32, String> {
-    cache.adjust_inventory_qty(id, delta)
+    if let Some(base) = settings.server_url() {
+        #[derive(Deserialize)] struct QtyResp { quantity: i32 }
+        let resp: QtyResp = http_patch(&http, &format!("{}/inventory/{}/qty", base, id), &settings.api_key(), &serde_json::json!({ "delta": delta })).await?;
+        Ok(resp.quantity)
+    } else {
+        cache.adjust_inventory_qty(id, delta)
+    }
 }
 
 /// Update all editable fields of an existing item (used by the edit modal).
 #[tauri::command]
-pub fn update_inventory_item(
+pub async fn update_inventory_item(
     item: InventoryItem,
     cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
 ) -> Result<(), String> {
-    cache.update_inventory_item(&item)
+    if let Some(base) = settings.server_url() {
+        http_put(&http, &format!("{}/inventory/{}", base, item.id), &settings.api_key(), &item).await
+    } else {
+        cache.update_inventory_item(&item)
+    }
 }
 
 #[tauri::command]
-pub fn delete_inventory_item(
+pub async fn delete_inventory_item(
     id: i64,
     cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
 ) -> Result<(), String> {
-    cache.delete_inventory_item(id)
+    if let Some(base) = settings.server_url() {
+        http_delete(&http, &format!("{}/inventory/{}", base, id), &settings.api_key()).await
+    } else {
+        cache.delete_inventory_item(id)
+    }
 }

@@ -872,6 +872,137 @@ function CatalogView({ items, products, onAddProduct, onUpdateProduct, onDeleteP
   );
 }
 
+// ── Server settings modal ─────────────────────────────────────────────────────
+
+function SettingsModal({ onClose }) {
+  const [url,    setUrl]    = useState("");
+  const [key,    setKey]    = useState("");
+  const [status, setStatus] = useState(null);   // null | "testing" | "ok:msg" | "err:msg"
+  const [saving, setSaving] = useState(false);
+
+  // Load current settings on open
+  useEffect(() => {
+    invokeOrMock("get_settings", {}, () => ({ inventory_server_url: "", inventory_api_key: "" }))
+      .then(s => {
+        setUrl(s.inventory_server_url || "");
+        setKey(s.inventory_api_key   || "");
+      })
+      .catch(() => {});
+  }, []);
+
+  const test = async () => {
+    if (!url.trim()) return;
+    setStatus("testing");
+    try {
+      const msg = await invokeOrMock(
+        "test_inventory_connection",
+        { url: url.trim(), apiKey: key.trim() },
+        () => "Connected — 1.0.0 (mock)"
+      );
+      setStatus("ok:" + msg);
+    } catch (e) {
+      setStatus("err:" + String(e));
+    }
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await invokeOrMock("save_settings", {
+        newSettings: {
+          inventory_server_url: url.trim() || null,
+          inventory_api_key:    key.trim() || null,
+        },
+      }, () => {});
+      onClose();
+    } catch (e) {
+      setStatus("err:Save failed — " + String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const statusColor = status?.startsWith("ok:") ? "#27ae60"
+    : status?.startsWith("err:") ? "#c0392b"
+    : "var(--text-muted)";
+  const statusMsg = status === "testing" ? "Testing…"
+    : status?.startsWith("ok:")  ? status.slice(3)
+    : status?.startsWith("err:") ? status.slice(4)
+    : null;
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
+      zIndex: 300, display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 20,
+    }}>
+      <div style={{
+        background: "var(--bg-surface)", borderRadius: 12, padding: "28px 32px",
+        width: "100%", maxWidth: 500, boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+      }}>
+        <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 20, fontWeight: 700, marginBottom: 6 }}>
+          Inventory Server
+        </div>
+        <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-muted)", marginBottom: 22 }}>
+          Both machines must point to the same server and use the same API key.
+          Leave blank to use local storage on this machine only.
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <label style={labelStyle}>
+            Server URL
+            <input
+              type="text"
+              value={url}
+              onChange={e => { setUrl(e.target.value); setStatus(null); }}
+              style={fieldStyle}
+              placeholder="http://192.168.1.10:3456  or  http://synology.local:3456"
+            />
+          </label>
+
+          <label style={labelStyle}>
+            API key
+            <input
+              type="password"
+              value={key}
+              onChange={e => { setKey(e.target.value); setStatus(null); }}
+              style={fieldStyle}
+              placeholder="Matches API_KEY in .env.docker on the server"
+            />
+          </label>
+
+          {/* Connection status */}
+          {statusMsg && (
+            <div style={{
+              fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 600,
+              color: statusColor, padding: "8px 12px",
+              background: status?.startsWith("ok:") ? "#f0fdf4" : status?.startsWith("err:") ? "#fff1f0" : "var(--bg-muted)",
+              border: `1px solid ${status?.startsWith("ok:") ? "#bbf7d0" : status?.startsWith("err:") ? "#ffd0cc" : "var(--border)"}`,
+              borderRadius: 6,
+            }}>{statusMsg}</div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginTop: 4 }}>
+            <button
+              onClick={test}
+              disabled={!url.trim() || status === "testing"}
+              style={{ ...btnSecondary, opacity: url.trim() ? 1 : 0.4 }}
+            >
+              Test connection
+            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={onClose} style={btnSecondary}>Cancel</button>
+              <button onClick={save} disabled={saving} style={{ ...btnPrimary, opacity: saving ? 0.6 : 1 }}>
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
 const SUB_TABS = [
@@ -887,6 +1018,7 @@ export default function InventoryTab() {
   const [error, setError]               = useState(null);
   const [reconcileMode, setReconcile]   = useState(false);
   const [editingItem, setEditingItem]   = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   // ── Load ───────────────────────────────────────────────────────────────────
 
@@ -1014,6 +1146,13 @@ export default function InventoryTab() {
             Laser sheet goods · plywood, MDF &amp; prepared blanks
           </div>
         </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {/* Gear / server settings */}
+          <button
+            onClick={() => setShowSettings(true)}
+            title="Inventory server settings"
+            style={{ ...iconBtn, fontSize: 16, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 6 }}
+          >⚙</button>
         {subTab === "stock" && (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {reconcileMode && (
@@ -1034,6 +1173,7 @@ export default function InventoryTab() {
             </button>
           </div>
         )}
+        </div>  {/* end right-side button group */}
       </div>
 
       {/* Sub-tab nav */}
@@ -1133,6 +1273,9 @@ export default function InventoryTab() {
           onClose={() => setEditingItem(null)}
         />
       )}
+
+      {/* Server settings modal */}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   );
 }

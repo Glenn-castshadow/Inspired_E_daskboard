@@ -7,6 +7,7 @@ mod catalog;
 // The easypost.rs file remains in the repo for git history but is no longer compiled.
 mod etsy;
 mod inventory;
+mod settings;
 mod usps;
 
 use tauri::Manager;
@@ -28,6 +29,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(usps::UspsState::new())
         .manage(etsy::EtsyState::new())
+        // Shared reqwest client — one instance, reused for all HTTP calls.
+        // reqwest::Client is already Arc-backed so cloning is cheap.
+        .manage(reqwest::Client::new())
         .setup(|app| {
             // Tauri v2: path resolver moved from app.path_resolver() to app.path()
             // and returns Result instead of Option.
@@ -36,10 +40,13 @@ fn main() {
                 .app_data_dir()
                 .expect("could not resolve app data directory");
             std::fs::create_dir_all(&data_dir)?;
+
             app.manage(
                 cache::CacheDb::new(&data_dir.join("cache.db"))
                     .expect("failed to open SQLite cache"),
             );
+            app.manage(settings::AppSettings::load(&data_dir));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -70,6 +77,10 @@ fn main() {
             catalog::add_product,
             catalog::update_product,
             catalog::delete_product,
+            // Settings
+            settings::get_settings,
+            settings::save_settings,
+            settings::test_inventory_connection,
             // Cache
             cache::cache_status,
             cache::clear_cache,

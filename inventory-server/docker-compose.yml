@@ -1,0 +1,17 @@
+services:
+  castshadow-inventory:
+    image: ghcr.io/glenn-castshadow/castshadow-inventory:latest
+    container_name: castshadow-inventory
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    volumes:
+      # Database file lives outside the container — survives image rebuilds
+      # Synology NAS path: /volume1/docker/castshadow-inventory/data
+      - /volume1/docker/castshadow-inventory/data:/data
+    env_file:
+      - .env.docker
+    environment:
+      NODE_ENV: production
+      PORT: 3456
+      DB_PATH: /data/inventory.db
