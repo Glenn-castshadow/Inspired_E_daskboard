@@ -14,7 +14,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{Emitter, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -39,8 +39,16 @@ pub struct EtsyState {
 
 impl EtsyState {
     pub fn new() -> Self {
+        // Always give the client request + connect timeouts. Without them a
+        // stalled Etsy connection makes get_orders hang forever, leaving the
+        // dashboard stuck on "Loading…" with no error and no cache fallback.
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             shop_creds: Mutex::new(HashMap::new()),
             shop_tokens: Mutex::new(HashMap::new()),
         }
@@ -64,6 +72,7 @@ pub(crate) struct ShopTokens {
 
 #[derive(Deserialize)]
 struct ReceiptsResponse {
+    count: u32,
     results: Vec<Receipt>,
 }
 
@@ -163,6 +172,22 @@ struct TokenResponse {
     expires_in: u64,
 }
 
+// ── Active listings response types ────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct ActiveListingsResponse {
+    count: u32,
+    results: Vec<ActiveListing>,
+}
+
+#[derive(Deserialize)]
+struct ActiveListing {
+    listing_id: u64,
+    title: String,
+    #[serde(default)]
+    images: Vec<ListingImage>,
+}
+
 // ── Normalized types (what the frontend receives) ────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -212,6 +237,24 @@ pub struct Order {
 pub struct ShopInfo {
     pub shop_id: u64,
     pub connected: bool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ActiveListingSyncResult {
+    pub shop_id: u64,
+    pub ok: bool,
+    pub active_count: usize,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ActiveListingSyncProgress {
+    pub shop_id: u64,
+    pub ok: bool,
+    pub done: bool,
+    pub synced_count: usize,
+    pub total_count: Option<u32>,
+    pub message: String,
 }
 
 // ── PKCE ──────────────────────────────────────────────────────────────────────
@@ -591,32 +634,53 @@ async fn fetch_shop_orders(
     shared_secret: &str,
     access_token: &str,
     shop_id: u64,
+    unshipped_only: bool,
 ) -> Result<Vec<Order>, String> {
-    // was_paid=true excludes abandoned carts; limit=100 covers most small shops.
-    // includes=Listings expands each transaction's listing data (gives us image URLs).
-    let url = format!(
-        "{}/application/shops/{}/receipts?limit=100&was_paid=true&includes=Listings",
-        ETSY_API_BASE, shop_id
-    );
-
+    const PAGE_SIZE: u32 = 100;
     // Etsy v3 API expects x-api-key in the format "keystring:shared_secret"
     let x_api_key = format!("{}:{}", api_key, shared_secret);
-    let resp = client
-        .get(&url)
-        .header("x-api-key", x_api_key)
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    // The fulfillment queue only needs unshipped orders, which is a tiny slice of
+    // the full paid history. was_shipped=false trims thousands of completed (incl.
+    // auto-completed digital-download) orders that never need fulfillment.
+    let shipped_filter = if unshipped_only { "&was_shipped=false" } else { "" };
+    let mut all_receipts: Vec<Receipt> = Vec::new();
+    let mut offset: u32 = 0;
 
-    if !resp.status().is_success() {
-        let status = resp.status().as_u16();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(format!("Etsy API HTTP {}: {}", status, body));
+    loop {
+        // was_paid=true excludes abandoned carts.
+        // includes=Listings expands each transaction's listing data (gives us image URLs).
+        let url = format!(
+            "{}/application/shops/{}/receipts?limit={}&offset={}&was_paid=true{}&includes=Listings",
+            ETSY_API_BASE, shop_id, PAGE_SIZE, offset, shipped_filter
+        );
+
+        let resp = client
+            .get(&url)
+            .header("x-api-key", &x_api_key)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("Etsy API HTTP {}: {}", status, body));
+        }
+
+        let body: ReceiptsResponse = resp.json().await.map_err(|e| e.to_string())?;
+        let total = body.count;
+        let page_len = body.results.len() as u32;
+        all_receipts.extend(body.results);
+        offset += page_len;
+
+        // Stop when we've received everything or got an empty page
+        if page_len == 0 || offset >= total {
+            break;
+        }
     }
 
-    let body: ReceiptsResponse = resp.json().await.map_err(|e| e.to_string())?;
-    let mut orders: Vec<Order> = body.results.into_iter()
+    let mut orders: Vec<Order> = all_receipts.into_iter()
         .filter(|r| r.status != "Canceled")
         .map(|r| normalize(r, shop_id))
         .collect();
@@ -794,70 +858,432 @@ pub async fn get_orders(
     state: State<'_, EtsyState>,
     cache: State<'_, CacheDb>,
 ) -> Result<Vec<Order>, String> {
-    const ORDER_CACHE_MAX_AGE: i64 = 30 * 60; // 30 minutes — conservative; key is shared with another app
     let force = force_refresh.unwrap_or(false);
+    let st = state.inner();
+    let cb = cache.inner();
 
-    let mut all_orders: Vec<Order> = Vec::new();
-    let mut fetched_count: u32 = 0;
+    // Fetch every shop concurrently so one slow/stalled shop can't gate the
+    // others — total time tracks the slowest shop, not the sum. Each shop's
+    // future falls back to its cached orders on any failure and never errors,
+    // so a single bad shop can't sink the whole load.
+    let per_shop: Vec<Vec<Order>> = futures_util::future::join_all(
+        shop_ids.into_iter().map(|shop_id| load_one_shop_orders(shop_id, force, st, cb)),
+    )
+    .await;
 
-    for shop_id in shop_ids {
-        // Serve from cache if fresh enough
-        if !force {
-            if let Some(age) = cache.shop_age_secs(shop_id) {
-                if age < ORDER_CACHE_MAX_AGE {
-                    let blobs = cache.get_orders_for_shops(&[shop_id])?;
-                    let cached: Vec<Order> = blobs
-                        .iter()
-                        .filter_map(|j| serde_json::from_str(j).ok())
-                        .collect();
-                    all_orders.extend(cached);
-                    continue;
-                }
-            }
-        }
-
-        // Cache miss or stale — fetch from Etsy using per-shop credentials.
-        // Skip shops that aren't configured/connected yet so one missing shop
-        // doesn't break the whole dashboard.
-        let creds = match resolve_shop_creds(&state, shop_id).await {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("Skipping shop {}: {}", shop_id, e);
-                continue;
-            }
-        };
-
-        // Stagger requests so each shop's QPS stays well under its 5/sec limit
-        if fetched_count > 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-        }
-        fetched_count += 1;
-        let token = match get_valid_token(&state.client, &creds.api_key, shop_id, &state).await {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("Skipping shop {}: {}", shop_id, e);
-                continue;
-            }
-        };
-        let orders = fetch_shop_orders(&state.client, &creds.api_key, &creds.shared_secret, &token, shop_id).await?;
-
-        let rows: Vec<(String, u64, String)> = orders
-            .iter()
-            .filter_map(|o| {
-                serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j))
-            })
-            .collect();
-        cache.upsert_orders(&rows)?;
-        cache.mark_shop_synced(shop_id)?;
-
-        all_orders.extend(orders);
-    }
-
+    let mut all_orders: Vec<Order> = per_shop.into_iter().flatten().collect();
     all_orders.sort_by(|a, b| {
         a.postage_printed.cmp(&b.postage_printed).then(a.due_date.cmp(&b.due_date))
     });
 
     Ok(all_orders)
+}
+
+/// Fast fulfillment-queue refresh: fetches only UNSHIPPED paid orders per shop.
+/// This is the actual work queue — a tiny slice of the full paid history — so it
+/// returns in seconds instead of the minutes the full historical fetch takes
+/// (gkdesignhaus alone has ~7k mostly-digital completed orders that never need
+/// fulfillment). The full history still loads separately for Analytics. Fetched
+/// orders are upserted into the cache, but it's only a handful of rows so there's
+/// no heavy write-churn. Each shop fails soft (returns nothing) so one bad shop
+/// can't sink the queue.
+#[tauri::command]
+pub async fn get_open_orders(
+    shop_ids: Vec<u64>,
+    state: State<'_, EtsyState>,
+    cache: State<'_, CacheDb>,
+) -> Result<Vec<Order>, String> {
+    let st = state.inner();
+    let cb = cache.inner();
+
+    let per_shop: Vec<Vec<Order>> = futures_util::future::join_all(
+        shop_ids.into_iter().map(|shop_id| fetch_one_shop_open_orders(shop_id, st, cb)),
+    )
+    .await;
+
+    let mut all_orders: Vec<Order> = per_shop.into_iter().flatten().collect();
+    all_orders.sort_by(|a, b| {
+        a.postage_printed.cmp(&b.postage_printed).then(a.due_date.cmp(&b.due_date))
+    });
+    Ok(all_orders)
+}
+
+/// Fetch one shop's unshipped orders from Etsy and upsert them into the cache.
+/// Fails soft (empty vec) on any credential/token/fetch error. Does NOT touch
+/// shop_sync — that timestamp gates the full-history cache, not this fast path.
+async fn fetch_one_shop_open_orders(shop_id: u64, state: &EtsyState, cache: &CacheDb) -> Vec<Order> {
+    let creds = match resolve_shop_creds(state, shop_id).await {
+        Ok(c) => c,
+        Err(e) => { eprintln!("open orders: skip shop {}: {}", shop_id, e); return vec![]; }
+    };
+    let token = match get_valid_token(&state.client, &creds.api_key, shop_id, state).await {
+        Ok(t) => t,
+        Err(e) => { eprintln!("open orders: token error shop {}: {}", shop_id, e); return vec![]; }
+    };
+    let orders = match fetch_shop_orders(
+        &state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, true,
+    ).await {
+        Ok(o) => o,
+        Err(e) => { eprintln!("open orders: fetch failed shop {}: {}", shop_id, e); return vec![]; }
+    };
+    let rows: Vec<(String, u64, String)> = orders
+        .iter()
+        .filter_map(|o| serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j)))
+        .collect();
+    let _ = cache.upsert_orders(&rows);
+    orders
+}
+
+/// Instant, cache-only read of orders — never contacts Etsy, ignores cache age.
+/// Used for the first paint at launch so the Fulfillment tab renders immediately
+/// from whatever is on disk; the UI then kicks off a background `get_orders`
+/// (force) to refresh. Returns an empty list if nothing is cached yet.
+#[tauri::command]
+pub async fn get_cached_orders(
+    shop_ids: Vec<u64>,
+    cache: State<'_, CacheDb>,
+) -> Result<Vec<Order>, String> {
+    let mut all_orders: Vec<Order> = cache
+        .get_orders_for_shops(&shop_ids)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|j| serde_json::from_str(j).ok())
+        .collect();
+    all_orders.sort_by(|a, b| {
+        a.postage_printed.cmp(&b.postage_printed).then(a.due_date.cmp(&b.due_date))
+    });
+    Ok(all_orders)
+}
+
+/// Load one shop's orders: serve fresh cache, else fetch from Etsy. On any
+/// credential/token/fetch failure (including a timeout) it returns that shop's
+/// last cached orders instead of erroring — so when run concurrently, one
+/// failing or slow shop can't block or sink the others.
+async fn load_one_shop_orders(
+    shop_id: u64,
+    force: bool,
+    state: &EtsyState,
+    cache: &CacheDb,
+) -> Vec<Order> {
+    const ORDER_CACHE_MAX_AGE: i64 = 30 * 60; // 30 minutes — conservative; key is shared with another app
+
+    let cached = || -> Vec<Order> {
+        cache
+            .get_orders_for_shops(&[shop_id])
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|j| serde_json::from_str(j).ok())
+            .collect()
+    };
+
+    // Serve from cache if fresh enough.
+    if !force {
+        if let Some(age) = cache.shop_age_secs(shop_id) {
+            if age < ORDER_CACHE_MAX_AGE {
+                return cached();
+            }
+        }
+    }
+
+    // Cache miss or stale — fetch from Etsy using per-shop credentials. Each
+    // shop is a separate Etsy app/key, so concurrent fetches stay within each
+    // shop's own QPS limit (no inter-shop stagger needed).
+    let creds = match resolve_shop_creds(state, shop_id).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Skipping shop {}: {}", shop_id, e);
+            return cached();
+        }
+    };
+    let token = match get_valid_token(&state.client, &creds.api_key, shop_id, state).await {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Shop {} token error ({}); serving cached orders", shop_id, e);
+            return cached();
+        }
+    };
+    let orders = match fetch_shop_orders(&state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, false).await {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Shop {} order fetch failed ({}); serving cached orders", shop_id, e);
+            return cached();
+        }
+    };
+
+    let rows: Vec<(String, u64, String)> = orders
+        .iter()
+        .filter_map(|o| serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j)))
+        .collect();
+    let _ = cache.upsert_orders(&rows);
+    let _ = cache.mark_shop_synced(shop_id);
+
+    orders
+}
+
+// ── Active listings fetch ─────────────────────────────────────────────────────
+
+/// Fetch one page of active listings for a shop and return
+/// (total_count, [(listing_id, title, image_url)]). The image_url is best-effort
+/// from the inline `includes=Images` expansion — the active-listings endpoint
+/// frequently omits it, so callers should backfill missing images via
+/// `fetch_listing_images`.
+async fn fetch_active_listings_page(
+    client: &Client,
+    api_key: &str,
+    shared_secret: &str,
+    access_token: &str,
+    shop_id: u64,
+    offset: u32,
+    limit: u32,
+) -> Result<(u32, Vec<(u64, String, Option<String>)>), String> {
+    let x_api_key = format!("{}:{}", api_key, shared_secret);
+    let mut out: Vec<(u64, String, Option<String>)> = Vec::new();
+
+    let url = format!(
+        "{}/application/shops/{}/listings/active?limit={}&offset={}&includes=Images",
+        ETSY_API_BASE, shop_id, limit, offset
+    );
+    let resp = client
+        .get(&url)
+        .header("x-api-key", &x_api_key)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        let status = resp.status().as_u16();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Etsy listings/active HTTP {}: {}", status, body));
+    }
+
+    let body: ActiveListingsResponse = resp.json().await.map_err(|e| e.to_string())?;
+    let total = body.count;
+
+    for listing in body.results {
+        let image_url = listing
+            .images
+            .into_iter()
+            .next()
+            .and_then(|img| img.url_170x135.or(img.url_75x75).or(img.url_570x_n));
+        out.push((listing.listing_id, listing.title, image_url));
+    }
+
+    Ok((total, out))
+}
+
+/// Fetch every active listing from the given shops and upsert them into the
+/// catalog_products table. Listings that already exist are updated only if
+/// they have no image_url yet. This ensures the Listings tab shows all live
+/// Etsy listings even if they have never appeared in an order.
+#[tauri::command]
+pub async fn sync_active_listings(
+    shop_ids: Vec<u64>,
+    state: State<'_, EtsyState>,
+    cache: State<'_, CacheDb>,
+    app: tauri::AppHandle,
+) -> Result<Vec<ActiveListingSyncResult>, String> {
+    use crate::cache::CatalogProductInput;
+    const PAGE_SIZE: u32 = 100;
+
+    let mut results = Vec::new();
+
+    for shop_id in shop_ids {
+        let creds = match resolve_shop_creds(&state, shop_id).await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("sync_active_listings: skipping shop {}: {}", shop_id, e);
+                results.push(ActiveListingSyncResult {
+                    shop_id,
+                    ok: false,
+                    active_count: 0,
+                    message: e,
+                });
+                let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                    shop_id,
+                    ok: false,
+                    done: true,
+                    synced_count: 0,
+                    total_count: None,
+                    message: format!("No Etsy credentials for shop {shop_id}"),
+                });
+                continue;
+            }
+        };
+        let token = match get_valid_token(&state.client, &creds.api_key, shop_id, &state).await {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("sync_active_listings: skipping shop {}: {}", shop_id, e);
+                results.push(ActiveListingSyncResult {
+                    shop_id,
+                    ok: false,
+                    active_count: 0,
+                    message: e,
+                });
+                let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                    shop_id,
+                    ok: false,
+                    done: true,
+                    synced_count: 0,
+                    total_count: None,
+                    message: format!("Reconnect this Etsy shop to grant listing access"),
+                });
+                continue;
+            }
+        };
+
+        let mut offset: u32 = 0;
+        let mut synced_count: usize = 0;
+        let mut total_count: Option<u32> = None;
+        let mut active_names: Vec<String> = Vec::new();
+        let mut failure: Option<ActiveListingSyncResult> = None;
+
+        loop {
+            let (total, listings) = match fetch_active_listings_page(
+                &state.client,
+                &creds.api_key,
+                &creds.shared_secret,
+                &token,
+                shop_id,
+                offset,
+                PAGE_SIZE,
+            ).await {
+                Ok(page) => page,
+                Err(e) => {
+                    eprintln!("sync_active_listings: listings fetch failed for shop {}: {}", shop_id, e);
+                    let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                        shop_id,
+                        ok: false,
+                        done: true,
+                        synced_count,
+                        total_count,
+                        message: e.clone(),
+                    });
+                    failure = Some(ActiveListingSyncResult {
+                        shop_id,
+                        ok: false,
+                        active_count: synced_count,
+                        message: e,
+                    });
+                    break;
+                }
+            };
+
+            total_count = Some(total);
+            let page_len = listings.len() as u32;
+            if page_len == 0 {
+                break;
+            }
+
+            // The active-listings endpoint's inline `includes=Images` is unreliable and
+            // often returns listings with no image. Backfill each page immediately, then
+            // upsert it so the Listings tab can render progress while the rest loads.
+            let missing_ids: Vec<u64> = listings
+                .iter()
+                .filter(|(_, _, img)| img.is_none())
+                .map(|(id, _, _)| *id)
+                .collect();
+            let mut backfill = std::collections::HashMap::new();
+            if !missing_ids.is_empty() {
+                match fetch_listing_images(
+                    &state.client, &creds.api_key, &creds.shared_secret, &token, &missing_ids,
+                ).await {
+                    Ok(m) => backfill = m,
+                    Err(e) => eprintln!(
+                        "sync_active_listings: image backfill failed for shop {} ({} missing): {}",
+                        shop_id, missing_ids.len(), e
+                    ),
+                }
+            }
+
+            let items: Vec<CatalogProductInput> = listings
+                .into_iter()
+                .map(|(listing_id, title, image_url)| CatalogProductInput {
+                    product_name: title,
+                    shop_id: shop_id as i64,
+                    image_url: image_url.or_else(|| backfill.get(&listing_id).cloned()),
+                    last_seen: None,
+                })
+                .collect();
+
+            if let Err(e) = cache.upsert_catalog_products(&items) {
+                let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                    shop_id,
+                    ok: false,
+                    done: true,
+                    synced_count,
+                    total_count,
+                    message: e.clone(),
+                });
+                failure = Some(ActiveListingSyncResult {
+                    shop_id,
+                    ok: false,
+                    active_count: synced_count,
+                    message: e,
+                });
+                break;
+            }
+
+            active_names.extend(items.iter().map(|i| i.product_name.clone()));
+            synced_count += items.len();
+            let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                shop_id,
+                ok: true,
+                done: false,
+                synced_count,
+                total_count,
+                message: format!("Synced {synced_count} active listings"),
+            });
+
+            offset += page_len;
+            if offset >= total {
+                break;
+            }
+        }
+
+        if let Some(result) = failure {
+            results.push(result);
+            continue;
+        }
+
+        // Flag exactly this shop's currently-active listings (and unflag anything
+        // delisted since the last sync) so the Listings tab can hide products that
+        // are no longer live — e.g. an item that only survives in old orders.
+        if let Err(e) = cache.mark_shop_listings_active(shop_id as i64, &active_names) {
+            let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+                shop_id,
+                ok: false,
+                done: true,
+                synced_count,
+                total_count,
+                message: e.clone(),
+            });
+            results.push(ActiveListingSyncResult {
+                shop_id,
+                ok: false,
+                active_count: synced_count,
+                message: e,
+            });
+            continue;
+        }
+
+        let _ = app.emit("active-listings-progress", ActiveListingSyncProgress {
+            shop_id,
+            ok: true,
+            done: true,
+            synced_count,
+            total_count,
+            message: "Synced active listings".to_string(),
+        });
+        results.push(ActiveListingSyncResult {
+            shop_id,
+            ok: true,
+            active_count: synced_count,
+            message: "Synced active listings".to_string(),
+        });
+    }
+
+    Ok(results)
 }
 
 /// Returns connection status for the given shop IDs.

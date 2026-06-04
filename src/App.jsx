@@ -7,6 +7,7 @@ import LightburnTab from "./lightburn-tab.jsx";
 import CatalogTab from "./catalog-tab.jsx";
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
 import { SHOP_IDS } from "./config.js";
+import { version as APP_VERSION } from "../package.json";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -14,7 +15,7 @@ const TAB_GROUPS = [
   [
     { key: "fulfillment", label: "Fulfillment" },
     { key: "inventory",   label: "Inventory"   },
-    { key: "catalog",     label: "Catalog"     },
+    { key: "catalog",     label: "Listings"    },
     { key: "ingest",      label: "Ingest"      },
   ],
   [
@@ -33,10 +34,120 @@ export default function App() {
   const [ordersRefreshing, setRefreshing] = useState(false);  // background refresh
   const [ordersError, setOrdersError]     = useState(null);
   const [lastUpdated, setLastUpdated]     = useState(null);
+  const [listingSync, setListingSync]     = useState({ state: "idle", results: [], updatedAt: null });
 
   // Tracks whether we've shown data at least once — avoids blocking spinner
   // on subsequent refreshes. Using a ref so loadOrders stays stable (no dep).
   const hasDataRef = useRef(false);
+
+  // Phase 1 of launch: paint instantly from the on-disk cache. This NEVER calls
+  // Etsy (unlike loadOrders(false), which re-fetches once the cache passes its
+  // 30-min freshness window), so the first tab renders without waiting on the
+  // network. The background refresh in loadOrders(true) brings it up to date.
+  const loadCachedOrders = useCallback(async () => {
+    if (!isTauri) {
+      setOrders(MOCK_ORDERS);
+      setLastUpdated(new Date());
+      hasDataRef.current = true;
+      setOrdersLoading(false);
+      return;
+    }
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const data = await invoke("get_cached_orders", { shopIds: SHOP_IDS });
+      if (data && data.length) {
+        setOrders(data);
+        hasDataRef.current = true; // so the upcoming refresh shows "Updating…" not a blocking spinner
+        // Intentionally leave lastUpdated unset — cache isn't "fresh"; the
+        // force refresh that follows sets the real timestamp.
+      }
+    } catch (e) {
+      console.error("cache-only order load failed:", e);
+    } finally {
+      setOrdersLoading(false); // clear the blocking spinner regardless
+    }
+  }, []);
+
+  // Fast fulfillment refresh: pull only the unshipped queue from Etsy (seconds,
+  // not the minutes the full history takes) and merge it into the shared orders
+  // array. The Fulfillment tab's open queue goes fresh quickly without waiting on
+  // the full historical fetch that Analytics needs. Merge by id so cached/historical
+  // orders (used by the Shipped/All filters) are preserved.
+  const loadOpenOrders = useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const open = await invoke("get_open_orders", { shopIds: SHOP_IDS });
+      if (Array.isArray(open) && open.length >= 0) {
+        setOrders(prev => {
+          const byId = new Map(prev.map(o => [o.id, o]));
+          for (const o of open) byId.set(o.id, o);
+          return [...byId.values()];
+        });
+        hasDataRef.current = true;
+        setOrdersLoading(false);
+      }
+    } catch (e) {
+      console.error("open-orders fast load failed:", e);
+    }
+  }, []);
+
+  const syncActiveListings = useCallback(async () => {
+    if (!isTauri) return;
+    setListingSync({ state: "syncing", results: [], updatedAt: null });
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const results = await invoke("sync_active_listings", { shopIds: SHOP_IDS });
+      setListingSync({
+        state: "done",
+        results: Array.isArray(results) ? results : [],
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      setListingSync({
+        state: "error",
+        results: [{ shop_id: 0, ok: false, active_count: 0, message: String(e) }],
+        updatedAt: new Date().toISOString(),
+      });
+      console.error("sync_active_listings failed:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlisten;
+    let cancelled = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("active-listings-progress", (event) => {
+        const p = event.payload ?? {};
+        setListingSync(prev => {
+          const rows = [...(prev.results ?? [])];
+          const idx = rows.findIndex(r => r.shop_id === p.shop_id);
+          const next = {
+            shop_id: p.shop_id,
+            ok: Boolean(p.ok),
+            active_count: Number(p.synced_count ?? 0),
+            message: p.message ?? "",
+          };
+          if (idx >= 0) rows[idx] = next;
+          else rows.push(next);
+          return {
+            state: p.done && !p.ok ? "error" : "syncing",
+            results: rows,
+            updatedAt: p.done ? new Date().toISOString() : prev.updatedAt,
+          };
+        });
+      }))
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((e) => console.error("active-listings-progress listener failed:", e));
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   const loadOrders = useCallback(async (forceRefresh = false) => {
     if (!isTauri) {
@@ -87,22 +198,34 @@ export default function App() {
           if (o.shop_id && !ex.shopId) ex.shopId = o.shop_id;
         }
       }
-      invoke("sync_catalog_products", { items: [...seen.values()] }).catch(() => {});
+      invoke("sync_catalog_products", { items: [...seen.values()] }).catch((e) => console.error("sync_catalog_products failed:", e));
+
+      // Fetch all active Etsy listings so the Listings tab shows everything,
+      // not just products that have appeared in a paid order.
+      if (forceRefresh) {
+        syncActiveListings();
+      }
     } catch (e) {
       setOrdersError(String(e));
     } finally {
       setOrdersLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [syncActiveListings]);
 
   useEffect(() => {
-    // Phase 1: show cached data immediately (fast path — no Etsy API call)
-    // Phase 2: refresh from Etsy in the background, update silently when done
-    loadOrders(false).then(() => loadOrders(true));
+    // Phase 1  — paint instantly from cache (no Etsy call; fast first render).
+    // Phase 1b — refresh the unshipped fulfillment queue from Etsy (seconds).
+    // Phase 2  — load the full order history in the background for Analytics
+    //            (minutes; never blocks the Fulfillment tab).
+    // All of this runs here at the App level on a fixed schedule, independent of
+    // which tab is active — switching tabs never reorders or restarts it.
+    loadCachedOrders()
+      .then(() => loadOpenOrders())
+      .then(() => loadOrders(true));
     const interval = setInterval(() => loadOrders(true), 30 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [loadOrders]);
+  }, [loadCachedOrders, loadOpenOrders, loadOrders]);
 
   useEffect(() => {
     applyTheme(theme);
@@ -200,12 +323,25 @@ export default function App() {
           </span>
         )}
 
+        {/* Version number — sits just left of the theme toggle */}
+        <span style={{
+          marginLeft: ordersRefreshing ? 14 : "auto",
+          marginBottom: 9,
+          fontFamily: "'DM Sans', sans-serif",
+          fontSize: 11,
+          color: "var(--text-faint)",
+          letterSpacing: "0.02em",
+          userSelect: "none",
+        }}>
+          v{APP_VERSION}
+        </span>
+
         {/* Theme toggle — right-aligned */}
         <button
           onClick={toggleTheme}
           title={`Switch to ${isDark ? "light" : "dark"} mode`}
           style={{
-            marginLeft: ordersRefreshing ? 10 : "auto",
+            marginLeft: 10,
             marginBottom: 6,
             padding: "6px 10px",
             background: "var(--bg-surface)",
@@ -227,10 +363,10 @@ export default function App() {
       </div>
 
       {/* Active view */}
-      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
+      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} />}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "inventory"   && <InventoryTab />}
-      {activeTab === "catalog"     && <CatalogTab />}
+      {activeTab === "catalog"     && <CatalogTab activeListingSync={listingSync} />}
       {activeTab === "ingest"      && <LightburnTab orders={orders} />}
       {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
     </div>

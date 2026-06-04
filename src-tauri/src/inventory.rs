@@ -32,6 +32,9 @@ pub struct InventoryItem {
     /// Empty string means untagged.
     pub sku:        String,
     pub notes:      String,
+    /// Landed cost per unit (per sheet/blank/piece), in dollars. 0 = not costed.
+    #[serde(default)]
+    pub unit_cost:  f64,
     pub created_at: i64,   // unix
     pub updated_at: i64,   // unix
 }
@@ -46,6 +49,8 @@ pub struct NewInventoryItem {
     pub quantity:   i32,
     pub sku:        String,
     pub notes:      String,
+    #[serde(default)]
+    pub unit_cost:  f64,
 }
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────

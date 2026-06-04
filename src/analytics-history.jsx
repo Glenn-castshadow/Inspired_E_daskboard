@@ -11,7 +11,7 @@
 // intact for any future code that wants to pass parsed CSV data — they're
 // driven by the `kind` prop.
 
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 const fmtMoney = (v, currency = 'USD') => {
@@ -49,6 +49,123 @@ const decodeHtml = (() => {
     return ta.value;
   };
 })();
+
+// ── CSV import helpers (for ad-spend import) ─────────────────────────────────
+
+// Minimal RFC-4180-ish CSV parser: handles quoted fields, escaped quotes, and
+// CRLF/LF line endings. Returns an array of string arrays (rows).
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQ = false, i = 0;
+  // Strip a UTF-8 BOM if present
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  while (i < text.length) {
+    const ch = text[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQ = false; i++; continue;
+      }
+      field += ch; i++; continue;
+    }
+    if (ch === '"') { inQ = true; i++; continue; }
+    if (ch === ',') { row.push(field); field = ''; i++; continue; }
+    if (ch === '\r') { i++; continue; }
+    if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+    field += ch; i++;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => c.trim() !== ''));
+}
+
+// A date cell ("2026-06-04", "6/4/2026", "June 4, 2026") → "YYYY-MM", or null.
+function cellToMonth(s) {
+  const t = (s ?? '').trim();
+  if (!t) return null;
+  const iso = t.match(/^(\d{4})-(\d{1,2})/);
+  if (iso) return `${iso[1]}-${String(+iso[2]).padStart(2, '0')}`;
+  const d = new Date(t);
+  if (!isNaN(d.getTime())) return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return null;
+}
+
+// A money cell ("$1,234.56", "(12.00)") → number, or NaN.
+function parseAmount(s) {
+  if (s == null) return NaN;
+  let t = String(s).replace(/[$,\s]/g, '');
+  if (!t) return NaN;
+  let neg = false;
+  if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
+  const n = parseFloat(t);
+  return isNaN(n) ? NaN : (neg ? -n : n);
+}
+
+const guessCol = (headers, patterns) => {
+  for (const p of patterns) {
+    const idx = headers.findIndex(h => p.test(h));
+    if (idx !== -1) return idx;
+  }
+  return -1;
+};
+
+// Parse an Etsy monthly statement CSV into net out-of-pocket Etsy Ads spend per
+// month. Etsy has no standalone ads export — spend is buried in the full
+// financial ledger (Shop Manager → Finances → Monthly statements → Generate CSV):
+//
+//   • The charge lives on `Type = Marketing` rows titled "Etsy Ads", in the Net
+//     column (Amount is blank "--" for fees). Other Marketing rows — notably the
+//     "Etsy Plus subscription fee" — are NOT ad spend and must be excluded.
+//   • Etsy Plus grants partial offsets as `Type = Fee` rows titled
+//     "Credit for Etsy Ads fee". Net out-of-pocket = charges − these credits.
+//
+// Rows are bucketed by the posting Date column (so an ad billed on the 1st for
+// the prior month's last day counts in the posting month — matches Etsy's
+// cash-basis billing). Returns { 'YYYY-MM': amount } rounded to cents, clamped
+// at >= 0. Throws only when the file isn't a recognizable statement.
+export function parseAdSpendCsv(text) {
+  const rows = parseCsv(text);
+  if (rows.length < 2) throw new Error('CSV has no data rows.');
+
+  const headers  = rows[0].map(h => h.trim());
+  const dateCol  = guessCol(headers, [/^date$/i]);
+  const typeCol  = guessCol(headers, [/^type$/i]);
+  const titleCol = guessCol(headers, [/^title$/i]);
+  const infoCol  = guessCol(headers, [/^info$/i]);
+  const netCol   = guessCol(headers, [/^net$/i, /fees?\s*&?\s*tax/i]);
+  if (dateCol === -1 || typeCol === -1 || netCol === -1) {
+    throw new Error("Doesn't look like an Etsy monthly statement (need Date, Type and Net columns).");
+  }
+
+  const byMonth = {};
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r];
+    const type  = (cells[typeCol]  ?? '').trim();
+    const title = (cells[titleCol] ?? '').trim();
+    const info  = (cells[infoCol]  ?? '').trim();
+    const blob  = `${title} ${info}`;
+
+    // Etsy Ads charge (excludes "Etsy Plus subscription fee" and other Marketing).
+    const isCharge = /^marketing$/i.test(type) && /etsy ads/i.test(title);
+    // Etsy Plus credit that offsets ad spend ("Credit for Etsy Ads fee").
+    const isCredit = /^fee$/i.test(type) && /etsy ads/i.test(blob) && /credit/i.test(blob);
+    if (!isCharge && !isCredit) continue;
+
+    const month = cellToMonth(cells[dateCol]);
+    if (!month) continue;
+    const net = parseAmount(cells[netCol]);
+    if (!Number.isFinite(net)) continue;
+
+    // Charges are negative, credits positive — accumulate signed, flip at the end.
+    byMonth[month] = (byMonth[month] || 0) + net;
+  }
+
+  // Signed ledger sum → positive out-of-pocket spend; clamp so a credit-heavy
+  // month never reports negative spend.
+  for (const k of Object.keys(byMonth)) {
+    byMonth[k] = Math.max(0, Math.round(-byMonth[k] * 100) / 100);
+  }
+  return byMonth;
+}
 
 // ── Aggregator: live orders → PaymentsView shape ─────────────────────────────
 //
@@ -139,18 +256,18 @@ export function buildPaymentsFromOrders(orders) {
 //   - `payments` (precomputed shape) + `kind`  — passthrough mode for any
 //     future CSV-import integration.
 
-export default function AnalyticsHistory({ orders, payments: precomputed, kind: kindProp }) {
+export default function AnalyticsHistory({ orders, payments: precomputed, kind: kindProp, adSpendByMonth, adSpendByShopMonth, onSetAdSpend, shops, focusedShopId }) {
   const payments = useMemo(
     () => precomputed ?? buildPaymentsFromOrders(orders ?? []),
     [precomputed, orders],
   );
   const kind = kindProp ?? (precomputed ? 'orders' : 'live-orders');
-  return <PaymentsView payments={payments} kind={kind} />;
+  return <PaymentsView payments={payments} kind={kind} adSpendByMonth={adSpendByMonth} adSpendByShopMonth={adSpendByShopMonth} onSetAdSpend={onSetAdSpend} shops={shops} focusedShopId={focusedShopId} />;
 }
 
 // ── PaymentsView (verbatim port of zipmap's component, plus live-orders mode) ─
 
-function PaymentsView({ payments, kind = 'orders' }) {
+function PaymentsView({ payments, kind = 'orders', adSpendByMonth, adSpendByShopMonth, onSetAdSpend, shops, focusedShopId }) {
   const { totals, months, topBuyers, topProducts = [], weekdayBreakdown = [], currency } = payments;
   const isDeposits = kind === 'etsy-deposits';
   const isLive     = kind === 'live-orders';
@@ -209,8 +326,17 @@ function PaymentsView({ payments, kind = 'orders' }) {
       {/* Monthly chart */}
       <Panel title={isDeposits ? 'Monthly Deposits' : 'Monthly Revenue'}>
         {months.length > 0
-          ? <MonthlyChart months={months} currency={currency} showNet={!isLive && !isDeposits} />
+          ? <MonthlyChart months={months} currency={currency} showNet={!isLive && !isDeposits} adSpendByMonth={adSpendByMonth} />
           : <Empty>No dated orders.</Empty>}
+        {onSetAdSpend && months.length > 0 && (
+          <AdSpendEditor
+            months={months}
+            adSpendByShopMonth={adSpendByShopMonth}
+            onSetAdSpend={onSetAdSpend}
+            shops={shops}
+            focusedShopId={focusedShopId}
+          />
+        )}
       </Panel>
 
       {/* Top buyers + weekday donut */}
@@ -268,22 +394,45 @@ function Empty({ children }) {
   return <p className="text-sm text-slate-500 py-4 text-center">{children}</p>;
 }
 
-function MonthlyChart({ months, currency, showNet = true }) {
-  const W = 720, H = 240;
-  const padL = 56, padR = 16, padT = 12, padB = 32;
+function MonthlyChart({ months, currency, showNet = true, adSpendByMonth }) {
+  const n = months.length;
+  const rotate = n > 12;                 // angle labels once they get tight
+
+  // Ad-spend overlay (manual monthly entry) drawn on a secondary right axis.
+  const spend     = months.map(m => Number(adSpendByMonth?.[m.month] || 0));
+  const maxSpend  = Math.max(0, ...spend);
+  const hasSpend  = maxSpend > 0;
+
+  const W = 720, H = rotate ? 256 : 240;
+  const padL = 56, padR = hasSpend ? 52 : 16, padT = 12, padB = rotate ? 50 : 32;
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
   const maxGross = Math.max(1, ...months.map(m => m.gross));
-  const barGap = 4;
-  const barW = Math.max(6, (innerW / months.length) - barGap);
+
+  // Slot-based layout: every bar gets an equal slice of innerW, so the chart
+  // always fits regardless of how many months there are (no overflow/clipping).
+  const slot   = innerW / n;
+  const barGap = slot > 10 ? 3 : 1;
+  const barW   = Math.max(1.5, slot - barGap);
+
+  // Show at most ~16 month labels; thin evenly and prefer keeping the last one.
+  const maxLabels = rotate ? 16 : 12;
+  const step = Math.max(1, Math.ceil(n / maxLabels));
 
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(t => ({
     y: padT + innerH - innerH * t,
     label: fmtMoney(maxGross * t, currency),
+    spendLabel: fmtMoney(maxSpend * t, currency),
   }));
 
+  const SPEND_COLOR = '#f59e0b';
+  const spendY = (v) => padT + innerH - (maxSpend > 0 ? (v / maxSpend) * innerH : 0);
+  const spendPoints = spend
+    .map((v, i) => `${padL + i * slot + barW / 2},${spendY(v)}`)
+    .join(' ');
+
   return (
-    <div className="w-full overflow-x-auto">
+    <div className="w-full">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" preserveAspectRatio="xMidYMid meet">
         {ticks.map((t, i) => (
           <g key={i}>
@@ -293,22 +442,28 @@ function MonthlyChart({ months, currency, showNet = true }) {
                   className="fill-slate-500" style={{ fontSize: 10 }}>
               {t.label}
             </text>
+            {hasSpend && (
+              <text x={W - padR + 8} y={t.y + 4} textAnchor="start"
+                    style={{ fontSize: 10, fill: SPEND_COLOR }}>
+                {t.spendLabel}
+              </text>
+            )}
           </g>
         ))}
 
         {months.map((m, i) => {
-          const x = padL + i * (barW + barGap);
+          const x = padL + i * slot;
           const grossH = (m.gross / maxGross) * innerH;
           const netH   = (m.net   / maxGross) * innerH;
           return (
             <g key={m.month}>
               <rect x={x} y={padT + innerH - grossH}
                     width={barW} height={grossH}
-                    fill={showNet ? 'rgba(52,211,153,0.22)' : 'rgb(52,211,153)'} rx="2" />
+                    fill={showNet ? 'rgba(52,211,153,0.22)' : 'rgb(52,211,153)'} rx="1.5" />
               {showNet && (
                 <rect x={x} y={padT + innerH - netH}
                       width={barW} height={netH}
-                      fill="rgb(96,165,250)" rx="2" />
+                      fill="rgb(96,165,250)" rx="1.5" />
               )}
               <title>
                 {showNet
@@ -319,11 +474,36 @@ function MonthlyChart({ months, currency, showNet = true }) {
           );
         })}
 
+        {/* Ad-spend overlay line + points (secondary right axis) */}
+        {hasSpend && (
+          <g>
+            <polyline points={spendPoints} fill="none" stroke={SPEND_COLOR} strokeWidth="2"
+                      strokeLinejoin="round" strokeLinecap="round" />
+            {months.map((m, i) => (
+              <circle key={m.month} cx={padL + i * slot + barW / 2} cy={spendY(spend[i])}
+                      r={n > 36 ? 1.5 : 2.5} fill={SPEND_COLOR}>
+                <title>{`${fmtMonth(m.month)}\nAd spend: ${fmtMoneyPrecise(spend[i], currency)}`}</title>
+              </circle>
+            ))}
+          </g>
+        )}
+
         {months.map((m, i) => {
-          if (months.length > 18 && i % 2 !== 0) return null;
-          const x = padL + i * (barW + barGap) + barW / 2;
+          // Keep evenly-spaced labels, but always render the final month.
+          if (i % step !== 0 && i !== n - 1) return null;
+          const cx = padL + i * slot + barW / 2;
+          const y  = H - padB + (rotate ? 12 : 14);
+          if (rotate) {
+            return (
+              <text key={m.month} x={cx} y={y} textAnchor="end"
+                    transform={`rotate(-45 ${cx} ${y})`}
+                    className="fill-slate-500" style={{ fontSize: 10 }}>
+                {fmtMonth(m.month)}
+              </text>
+            );
+          }
           return (
-            <text key={m.month} x={x} y={H - padB + 14} textAnchor="middle"
+            <text key={m.month} x={cx} y={y} textAnchor="middle"
                   className="fill-slate-500" style={{ fontSize: 10 }}>
               {fmtMonth(m.month)}
             </text>
@@ -331,13 +511,148 @@ function MonthlyChart({ months, currency, showNet = true }) {
         })}
       </svg>
 
-      {showNet && (
+      {(showNet || hasSpend) && (
         <div className="flex gap-4 mt-2 px-2 text-xs">
-          <LegendChip color="rgba(52,211,153,0.6)" label="Gross" />
-          <LegendChip color="rgb(96,165,250)"      label="Net" />
+          {showNet ? (
+            <>
+              <LegendChip color="rgba(52,211,153,0.6)" label="Gross" />
+              <LegendChip color="rgb(96,165,250)"      label="Net" />
+            </>
+          ) : (
+            <LegendChip color="rgb(52,211,153)" label="Revenue" />
+          )}
+          {hasSpend && <LegendChip color={SPEND_COLOR} label="Ad spend" />}
         </div>
       )}
     </div>
+  );
+}
+
+function AdSpendEditor({ months, adSpendByShopMonth, onSetAdSpend, shops = [], focusedShopId }) {
+  const [open, setOpen] = useState(false);
+  const [status, setStatus] = useState(null);   // { ok: bool, msg: string }
+  const fileRef = useRef();
+
+  // Which shop ad spend is entered/imported for. Defaults to the focused shop,
+  // else the first shop. Following focus keeps the editor in step with the
+  // chart when the user clicks a shop's bar above.
+  const [shopId, setShopId] = useState(() => focusedShopId ?? shops[0]?.id ?? null);
+  useEffect(() => {
+    if (focusedShopId != null) setShopId(focusedShopId);
+  }, [focusedShopId]);
+
+  const byMonth  = adSpendByShopMonth?.[shopId] ?? {};
+  const shopName = shops.find(s => s.id === shopId)?.name ?? `Shop ${shopId}`;
+  const ordered  = useMemo(
+    () => [...months].sort((a, b) => b.month.localeCompare(a.month)),
+    [months],
+  );
+  const entered = months.reduce((s, m) => s + Number(byMonth?.[m.month] || 0), 0);
+
+  // Import this shop's Etsy monthly statement CSV. Each month found overwrites
+  // that shop's stored value (re-importing is idempotent); other months and
+  // other shops are untouched.
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';   // allow re-selecting the same file
+    if (!file) return;
+    if (shopId == null) { setStatus({ ok: false, msg: 'Pick a shop first.' }); return; }
+    try {
+      const csvByMonth = parseAdSpendCsv(await file.text());
+      const entries = Object.entries(csvByMonth);
+      if (entries.length === 0) {
+        setStatus({ ok: true, msg: 'No Etsy Ads charges found in this statement.' });
+        return;
+      }
+      for (const [month, amount] of entries) onSetAdSpend(Number(shopId), month, amount);
+      const total = entries.reduce((s, [, a]) => s + a, 0);
+      const label = entries.map(([m]) => fmtMonth(m)).join(', ');
+      setStatus({ ok: true, msg: `Imported ${label} · ${fmtMoneyPrecise(total)} → ${shopName}` });
+      setOpen(true);
+    } catch (err) {
+      setStatus({ ok: false, msg: String(err?.message || err) });
+    }
+  };
+
+  return (
+    <div className="mt-1">
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="text-xs text-slate-400 hover:text-slate-200 transition-colors"
+        >
+          {open ? '▴' : '▾'} Edit ad spend
+          {entered > 0 && <span className="text-slate-500"> · {fmtMoneyPrecise(entered)} entered</span>}
+        </button>
+        <select
+          value={shopId ?? ''}
+          onChange={e => setShopId(Number(e.target.value))}
+          className="text-xs bg-slate-800 text-slate-200 rounded px-1.5 py-1 border border-slate-700 focus:border-amber-500 outline-none"
+          title="Shop this ad spend belongs to"
+        >
+          {shops.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <button
+          onClick={() => fileRef.current?.click()}
+          className="text-xs text-amber-400/80 hover:text-amber-300 transition-colors"
+          title="Import this shop's Etsy monthly statement CSV — net ad spend overwrites the matching months"
+        >
+          ↑ Import CSV
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={handleFile}
+        />
+        {status && (
+          <span className={`text-xs ${status.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+            {status.msg}
+          </span>
+        )}
+      </div>
+      {open && (
+        <>
+          <div className="mt-2 text-[10px] uppercase tracking-wide text-slate-500">
+            Editing {shopName}
+          </div>
+          <div className="mt-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-2">
+            {ordered.map(m => (
+              <AdSpendInput
+                key={m.month}
+                month={m.month}
+                value={byMonth?.[m.month]}
+                onSet={(month, amount) => onSetAdSpend(Number(shopId), month, amount)}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AdSpendInput({ month, value, onSet }) {
+  const [draft, setDraft] = useState(value != null ? String(value) : '');
+  useEffect(() => { setDraft(value != null ? String(value) : ''); }, [value]);
+  const commit = () => {
+    const n = parseFloat(draft);
+    onSet(month, Number.isFinite(n) && n >= 0 ? n : 0);
+  };
+  return (
+    <label className="flex items-center gap-1.5 text-xs">
+      <span className="text-slate-400 w-14 shrink-0">{fmtMonth(month)}</span>
+      <span className="text-slate-500">$</span>
+      <input
+        type="number" min="0" step="0.01" inputMode="decimal"
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        className="w-full min-w-0 bg-slate-800 text-slate-200 rounded px-2 py-1 border border-slate-700 focus:border-amber-500 outline-none"
+      />
+    </label>
   );
 }
 

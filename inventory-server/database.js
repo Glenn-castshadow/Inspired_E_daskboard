@@ -17,6 +17,7 @@ db.exec(`
     quantity    INTEGER NOT NULL DEFAULT 0,
     sku         TEXT    NOT NULL DEFAULT '',
     notes       TEXT    NOT NULL DEFAULT '',
+    unit_cost   REAL    NOT NULL DEFAULT 0,
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
   );
@@ -58,6 +59,15 @@ db.exec(`
     created_at        INTEGER NOT NULL
   );
 `);
+
+// ── Idempotent migrations for existing databases ──────────────────────────────
+// ALTER TABLE … ADD COLUMN throws if the column already exists; ignore that.
+try {
+  db.exec("ALTER TABLE inventory ADD COLUMN unit_cost REAL NOT NULL DEFAULT 0");
+  console.log('[db] migrated: added inventory.unit_cost');
+} catch (e) {
+  if (!/duplicate column/i.test(e.message)) throw e;
+}
 
 console.log(`[db] SQLite open: ${dbPath}`);
 

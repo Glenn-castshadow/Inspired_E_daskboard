@@ -213,6 +213,8 @@ pub async fn update_lightburn_file(
     let new_filename = format!("{}_{}.lbrn2", base, slug);
 
     if let Some(server_base) = settings.server_url() {
+        // Server-side rename — the PUT route updates DB and renames the file on disk.
+        // Requires the container to be rebuilt with the updated routes/lightburn.js.
         let body = serde_json::json!({
             "sku_base":   base,
             "short_name": short_name.trim(),

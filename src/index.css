@@ -5,3 +5,11 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Used by inline `animation: "spin 1s linear infinite"` on the ↻ refresh/sync
+ * indicators (tab bar, refresh button, cold-load spinner). Defined here because
+ * the code uses the raw animation name rather than Tailwind's `animate-spin`
+ * class, so Tailwind never emits this keyframe. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}

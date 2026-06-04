@@ -1,74 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  MATERIALS, CATEGORIES, FINISHES, ITEM_TYPES,
+  CAT_MAP, FIN_MAP, matMeta, parseSku,
+} from "./taxonomy.js";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
-// ── Material presets ──────────────────────────────────────────────────────────
-
-export const MATERIALS = [
-  { id: "plywood",         label: "Plywood",        color: "#b5885a" },
-  { id: "raw_mdf",         label: "Raw MDF",         color: "#9e9e9e" },
-  { id: "copper_mdf",      label: "Copper MDF",      color: "#b87333" },
-  { id: "gold_foil_mdf",   label: "Gold Foil",       color: "#c9a84c" },
-  { id: "silver_foil_mdf", label: "Silver Foil",     color: "#8a9ba8" },
-  { id: "black_foil_mdf",  label: "Black Foil",      color: "#444"    },
-  { id: "white_foil_mdf",  label: "White Foil",      color: "#aaa"    },
-  { id: "custom",          label: "Other / Custom",  color: "#7c6f9f" },
-];
-
-const MAT = Object.fromEntries(MATERIALS.map(m => [m.id, m]));
-function matMeta(id) { return MAT[id] ?? { id, label: id, color: "#777" }; }
-
-// ── SKU reference tables ──────────────────────────────────────────────────────
-
-export const CATEGORIES = [
-  { code: "SE",  label: "Special Edition"       },
-  { code: "ORN", label: "Architectural Ornaments" },
-  { code: "DBC", label: "Doorbell Chime Covers" },
-  { code: "WAL", label: "Wall & Window Panels"  },
-  { code: "MPS", label: "Multi-Panel & Sets"    },
-  { code: "LMP", label: "Lamps & Lighting"      },
-  { code: "JWL", label: "Jewelry"               },
-  { code: "GI",  label: "Global Influences"     },
-  { code: "ACC", label: "Accessories"           },
-];
-
-export const FINISHES = [
-  { code: "CU",  label: "Copper"             },
-  { code: "CL",  label: "Copper Leaf"        },
-  { code: "CPF", label: "Copper Patina Foil" },
-  { code: "GL",  label: "Gold Leaf"          },
-  { code: "MA",  label: "Maple"              },
-  { code: "CH",  label: "Cherry"             },
-  { code: "WA",  label: "Walnut"             },
-  { code: "WO",  label: "White Oak"          },
-  { code: "AC",  label: "Aromatic Cedar"     },
-  { code: "MH",  label: "Mahogany"           },
-  { code: "SP",  label: "Sapele"             },
-  { code: "UB",  label: "Unfinished Birch"   },
-  { code: "UC",  label: "Unfinished Cherry"  },
-  { code: "MDF", label: "MDF"                },
-];
-
-const CAT_MAP = Object.fromEntries(CATEGORIES.map(c => [c.code, c.label]));
-const FIN_MAP = Object.fromEntries(FINISHES.map(f => [f.code, f.label]));
-
-/** Best-effort parse of a SKU string into its component codes. */
-function parseSku(sku) {
-  const parts = sku.toUpperCase().replace(/\s/g, "").split("-").filter(Boolean);
-  if (parts.length < 2) return {};
-  return {
-    category: parts[0] ?? "",
-    design:   parts[1] ?? "",
-    finish:   parts[parts.length - 1] ?? "",
-  };
-}
-
-const ITEM_TYPES = [
-  { id: "sheet",    label: "Sheet stock"    },
-  { id: "blank",    label: "Prepared blank" },
-  { id: "finished", label: "Finished piece" },
-  { id: "offcut",   label: "Offcut"         },
-];
+// Taxonomy (categories, finishes, materials, item types) and the SKU grammar
+// now live in ./taxonomy.js so every tab shares one source of truth.
+// Re-exported here for back-compat with existing importers.
+export { MATERIALS, CATEGORIES, FINISHES };
 
 // ── Mock data (Vite preview only) ─────────────────────────────────────────────
 
@@ -95,6 +36,10 @@ const MOCK_PRODUCTS = [
 function fmtDims(w, h) {
   const fmt = n => Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, "");
   return `${fmt(w)}" × ${fmt(h)}"`;
+}
+
+function fmtMoney(n) {
+  return `$${(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 async function invokeOrMock(cmd, args, mockFn) {
@@ -240,7 +185,7 @@ function QtyCell({ item, reconcileMode, onAdjust, onSet }) {
 
 const BLANK_FORM = {
   item_type: "blank", material: "copper_mdf",
-  width: "", height: "", thickness: "1/8", quantity: "1", sku: "", notes: "",
+  width: "", height: "", thickness: "1/8", quantity: "1", sku: "", notes: "", unit_cost: "",
 };
 
 function ItemForm({ initial = BLANK_FORM, onSave, onCancel }) {
@@ -261,6 +206,7 @@ function ItemForm({ initial = BLANK_FORM, onSave, onCancel }) {
       quantity:   Math.max(0, parseInt(form.quantity, 10) || 0),
       sku:        showSku ? form.sku.toUpperCase().trim() : "",
       notes:      form.notes.trim(),
+      unit_cost:  Math.max(0, parseFloat(form.unit_cost) || 0),
     });
   };
 
@@ -286,8 +232,8 @@ function ItemForm({ initial = BLANK_FORM, onSave, onCancel }) {
         </label>
       </div>
 
-      {/* Row 2: dimensions + thickness + qty */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 100px 80px", gap: 10 }}>
+      {/* Row 2: dimensions + thickness + qty + cost */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px 70px 110px", gap: 10 }}>
         <label style={labelStyle}>
           Width (in)
           <input type="number" min="0" step="0.25" value={form.width}
@@ -309,6 +255,11 @@ function ItemForm({ initial = BLANK_FORM, onSave, onCancel }) {
           Qty
           <input type="number" min="0" value={form.quantity}
             onChange={e => set("quantity", e.target.value)} style={fieldStyle} />
+        </label>
+        <label style={labelStyle}>
+          Unit cost ($)
+          <input type="number" min="0" step="0.01" value={form.unit_cost}
+            onChange={e => set("unit_cost", e.target.value)} style={fieldStyle} placeholder="0.00" />
         </label>
       </div>
 
@@ -349,7 +300,7 @@ function ItemRow({ item, reconcileMode, onAdjust, onSet, onEdit, onDelete }) {
   return (
     <div style={{
       display: "grid",
-      gridTemplateColumns: "160px 110px 56px 1fr 110px 72px",
+      gridTemplateColumns: "150px 100px 50px 1fr 104px 96px 72px",
       gap: 10, alignItems: "center",
       padding: "9px 14px",
       background: item.quantity === 0 ? "var(--bg-muted)" : "var(--bg-surface)",
@@ -388,6 +339,22 @@ function ItemRow({ item, reconcileMode, onAdjust, onSet, onEdit, onDelete }) {
       {/* Qty controls */}
       <QtyCell item={item} reconcileMode={reconcileMode} onAdjust={onAdjust} onSet={onSet} />
 
+      {/* Cost: unit cost + extended (qty × unit cost) */}
+      <div style={{ textAlign: "right" }}>
+        {item.unit_cost > 0 ? (
+          <>
+            <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600, color: "var(--text)" }}>
+              {fmtMoney(item.unit_cost * item.quantity)}
+            </div>
+            <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 10, color: "var(--text-faint)" }}>
+              {fmtMoney(item.unit_cost)} ea
+            </div>
+          </>
+        ) : (
+          <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 12, color: "var(--text-faint)" }}>—</span>
+        )}
+      </div>
+
       {/* Actions */}
       <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
         {confirmDelete ? (
@@ -411,6 +378,8 @@ function ItemRow({ item, reconcileMode, onAdjust, onSet, onEdit, onDelete }) {
 function Section({ title, items, reconcileMode, onAdjust, onSet, onEdit, onDelete, onAdd, addLabel, emptyMsg, defaultType }) {
   const [adding, setAdding] = useState(false);
 
+  const sectionValue = items.reduce((s, i) => s + (i.unit_cost || 0) * i.quantity, 0);
+
   return (
     <div style={{ marginBottom: 32 }}>
       <div style={{
@@ -427,6 +396,12 @@ function Section({ title, items, reconcileMode, onAdjust, onSet, onEdit, onDelet
             fontFamily: "'DM Sans', sans-serif",
             color: "var(--text-muted)", opacity: 0.7,
           }}>{items.length}</span>
+          {sectionValue > 0 && (
+            <span style={{
+              marginLeft: 10, fontSize: 12, fontWeight: 600,
+              fontFamily: "'DM Sans', sans-serif", color: "var(--text-muted)",
+            }}>· {fmtMoney(sectionValue)} on hand</span>
+          )}
         </div>
         {!adding && (
           <button onClick={() => setAdding(true)} style={{ ...btnSecondary, fontSize: 12, padding: "5px 12px" }}>
@@ -496,6 +471,7 @@ function EditModal({ item, onSave, onClose }) {
             quantity:  String(item.quantity),
             sku:       item.sku ?? "",
             notes:     item.notes,
+            unit_cost: item.unit_cost != null ? String(item.unit_cost) : "",
           }}
           onSave={updated => onSave({ ...item, ...updated })}
           onCancel={onClose}
@@ -778,7 +754,7 @@ function CatalogView({ items, products, onAddProduct, onUpdateProduct, onDeleteP
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
         <div>
           <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 17, fontWeight: 700, color: "var(--text)" }}>
-            Product Catalog
+            Products
             <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, fontFamily: "'DM Sans', sans-serif", color: "var(--text-muted)", opacity: 0.7 }}>
               {products.length}
             </span>
@@ -1004,8 +980,8 @@ function SettingsModal({ onClose }) {
 // ── Main tab ──────────────────────────────────────────────────────────────────
 
 const SUB_TABS = [
-  { key: "stock",   label: "Stock"           },
-  { key: "catalog", label: "Product Catalog" },
+  { key: "stock",   label: "Stock"    },
+  { key: "catalog", label: "Products" },
 ];
 
 export default function InventoryTab() {

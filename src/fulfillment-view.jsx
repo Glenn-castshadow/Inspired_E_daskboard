@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { SHOP_META } from "./config";
+import { categoryLabel } from "./taxonomy.js";
 import { QueueCutWidget } from "./lightburn-tab.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
@@ -228,8 +229,25 @@ function TrackingSection({ entry, code }) {
   );
 }
 
+// ── Product-family badge (sku_base + category) ───────────────────────────────
+function FamilyBadge({ family, dim }) {
+  if (!family) return null;
+  return (
+    <span title={`Product family ${family.base}`} style={{
+      fontSize: 10, fontFamily: "'DM Sans', sans-serif",
+      color: "var(--text-muted)", background: "var(--bg-muted)",
+      border: "1px solid var(--border)", borderRadius: 4, padding: "1px 6px",
+      display: "inline-flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
+      opacity: dim ? 0.65 : 1,
+    }}>
+      <span style={{ fontFamily: "monospace", fontWeight: 700, color: "var(--accent)" }}>{family.base}</span>
+      {family.cat ? `· ${family.cat}` : ""}
+    </span>
+  );
+}
+
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
+function OrderRow({ order, family, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
   useEffect(() => {
     if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
     onTrackingLoad(order.id, order.tracking_code);
@@ -327,6 +345,7 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
             }}>
               {shop.name}
             </span>
+            <FamilyBadge family={family} dim={isShipped} />
             <span style={{ fontSize: 12, color: "#aaa", fontFamily: "'DM Sans', sans-serif" }}>
               {order.id} · {decodeHtml(order.buyer)}
             </span>
@@ -586,6 +605,23 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
   const fetchingTracking = useRef(new Set());
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   const [pickListOpen, setPickListOpen] = useState(false);
+  const [links, setLinks] = useState([]);
+
+  // Listing → product-family links, so each order can show its SKU family/category.
+  useEffect(() => {
+    if (!isTauri) return;
+    import("@tauri-apps/api/core").then(({ invoke }) =>
+      invoke("list_listing_product_links").then(setLinks).catch(() => {}));
+  }, [orders]);
+
+  const familyByProduct = useMemo(() => {
+    const m = {};
+    for (const l of links) {
+      if (!l.sku_base) continue;
+      m[l.product_name] = { base: l.sku_base, cat: categoryLabel(l.sku_base.split("-")[0]) };
+    }
+    return m;
+  }, [links]);
 
   const toggleSelected = useCallback((id) => {
     setSelectedIds(prev => {
@@ -815,8 +851,12 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       {/* Order rows */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {loading && orders.length === 0 && (
-          <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#bbb" }}>
-            Loading orders…
+          <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif" }}>
+            <div style={{ fontSize: 24, marginBottom: 12, display: "inline-block", animation: "spin 1s linear infinite", color: "var(--text-faint)" }}>↻</div>
+            <div style={{ fontSize: 14, color: "var(--text-muted)" }}>Syncing orders from Etsy…</div>
+            <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 6 }}>
+              The first sync pulls every order and can take up to a minute on a new computer.
+            </div>
           </div>
         )}
         {!loading && error && orders.length === 0 && (
@@ -846,6 +886,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
           <OrderRow
             key={order.id}
             order={order}
+            family={familyByProduct[order.product_name]}
             expanded={expandedId === order.id}
             onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
             trackingEntry={trackingCache[order.id]}
@@ -908,6 +949,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       {pickListOpen && (
         <PickList
           orders={orders.filter(o => selectedIds.has(o.id))}
+          familyByProduct={familyByProduct}
           onClose={() => setPickListOpen(false)}
         />
       )}
@@ -957,7 +999,7 @@ function StageBox({ checked, label, onClick }) {
   );
 }
 
-function PickList({ orders, onClose }) {
+function PickList({ orders, familyByProduct = {}, onClose }) {
   const [stages, setStages] = useState(() =>
     Object.fromEntries(orders.map(o => [o.id, { cut: false, assembled: false, packed: false }]))
   );
@@ -1014,8 +1056,11 @@ function PickList({ orders, onClose }) {
           const s = stages[o.id] || { cut: false, assembled: false, packed: false };
           const notes = decodeHtml(o.details?.special_instructions || "");
 
+          const fam = familyByProduct[o.product_name];
+
           // Build metadata chips — only include fields that have a value
           const meta = [
+            fam                              && { label: null,         value: fam.base + (fam.cat ? ` · ${fam.cat}` : ""), bold: true, mono: true },
             o.buyer                          && { label: null,         value: decodeHtml(o.buyer),         bold: true  },
             o.dimensions                     && { label: null,         value: decodeHtml(o.dimensions),    bold: false },
             o.received_date                  && { label: "Ordered",    value: fmtDate(o.received_date),    bold: false },
@@ -1073,7 +1118,7 @@ function PickList({ orders, onClose }) {
                     fontFamily: "'DM Sans', sans-serif", fontSize: 11,
                   }}>
                     {meta.map((m, i) => (
-                      <span key={i} style={{ fontWeight: m.bold ? 700 : 400, opacity: m.bold ? 1 : 0.75, whiteSpace: "nowrap" }}>
+                      <span key={i} style={{ fontWeight: m.bold ? 700 : 400, opacity: m.bold ? 1 : 0.75, whiteSpace: "nowrap", fontFamily: m.mono ? "monospace" : undefined }}>
                         {m.label && <span style={{ opacity: 0.55, fontWeight: 400 }}>{m.label} </span>}
                         {m.value}
                       </span>

@@ -1061,11 +1061,12 @@ dependencies = [
 
 [[package]]
 name = "etsy-dashboard"
-version = "0.1.47"
+version = "0.1.73"
 dependencies = [
  "aes-gcm",
  "base64 0.21.7",
  "chrono",
+ "futures-util",
  "keyring",
  "pbkdf2",
  "rand",

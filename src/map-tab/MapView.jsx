@@ -40,6 +40,25 @@ for (const { zip, lat, lon, state, city } of zipCentroids) {
 }
 
 
+// ── Date-range helpers ──────────────────────────────────────────────────────
+// Orders carry received_date as "YYYY-MM-DD", so string comparison is
+// chronological and timezone-safe.
+function ymd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+function daysAgo(n) { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); }
+
+const DATE_PRESETS = [
+  { id: 'all',  label: 'All time'     },
+  { id: '30d',  label: '30 days'      },
+  { id: '90d',  label: '90 days'      },
+  { id: '12mo', label: '12 months'    },
+  { id: 'ytd',  label: 'Year to date' },
+];
+
 // Normalize an Etsy ship_zip into the 5-digit form our centroid table uses.
 // Handles ZIP+4 ("48124-1023"), 9-digit concat ("481241023"), and leading-zero
 // loss from a possible upstream int coercion ("1023" → "01023").
@@ -67,6 +86,9 @@ export default function MapView({ orders = [], loading = false, error = null, on
   const [baseMap, setBaseMap]   = useState('flat');
   const [selectedZip, setSelectedZip] = useState(null);
   const [focusedShopId, setFocusedShopId] = useState(null); // optional shop filter
+  const [datePreset, setDatePreset]   = useState('all');    // see DATE_PRESETS | 'custom'
+  const [customFrom, setCustomFrom]   = useState('');
+  const [customTo,   setCustomTo]     = useState('');
   const [originZip, setOriginZip] = useState(
     () => (typeof localStorage !== 'undefined' && localStorage.getItem('mapTab-origin')) || ''
   );
@@ -78,12 +100,37 @@ export default function MapView({ orders = [], loading = false, error = null, on
   }, [originZip]);
 
   // ── Derived datasets ────────────────────────────────────────────────────────
-  // Orders restricted to the focused shop (if any).
+  // Date-range bounds (YYYY-MM-DD) from the active preset or custom inputs.
+  const { fromDate, toDate } = useMemo(() => {
+    if (datePreset === 'custom') return { fromDate: customFrom || null, toDate: customTo || null };
+    const today = ymd(new Date());
+    switch (datePreset) {
+      case '30d':  return { fromDate: daysAgo(30),  toDate: today };
+      case '90d':  return { fromDate: daysAgo(90),  toDate: today };
+      case '12mo': return { fromDate: daysAgo(365), toDate: today };
+      case 'ytd':  return { fromDate: `${new Date().getFullYear()}-01-01`, toDate: today };
+      default:     return { fromDate: null, toDate: null }; // all time
+    }
+  }, [datePreset, customFrom, customTo]);
+
+  // Orders within the active date range.
+  const dateFilteredOrders = useMemo(() => {
+    if (!fromDate && !toDate) return orders;
+    return orders.filter(o => {
+      const d = o.received_date;
+      if (!d) return false;
+      if (fromDate && d < fromDate) return false;
+      if (toDate && d > toDate) return false;
+      return true;
+    });
+  }, [orders, fromDate, toDate]);
+
+  // Then restrict to the focused shop (if any).
   const focusedOrders = useMemo(
     () => (focusedShopId == null
-      ? orders
-      : orders.filter(o => o.shop_id === focusedShopId)),
-    [orders, focusedShopId],
+      ? dateFilteredOrders
+      : dateFilteredOrders.filter(o => o.shop_id === focusedShopId)),
+    [dateFilteredOrders, focusedShopId],
   );
 
   // ZIP → order count (US-only since centroid table is US).
@@ -217,7 +264,11 @@ export default function MapView({ orders = [], loading = false, error = null, on
             {error && <p className="text-rose-400">{error}</p>}
             {!loading && !error && (
               <>
-                <p>{orders.length.toLocaleString()} order{orders.length !== 1 ? 's' : ''} loaded</p>
+                {fromDate || toDate ? (
+                  <p>{dateFilteredOrders.length.toLocaleString()} of {orders.length.toLocaleString()} order{orders.length !== 1 ? 's' : ''} in range</p>
+                ) : (
+                  <p>{orders.length.toLocaleString()} order{orders.length !== 1 ? 's' : ''} loaded</p>
+                )}
                 <p>{csvData.length.toLocaleString()} unique ZIP{csvData.length !== 1 ? 's' : ''}</p>
                 <button
                   onClick={() => onRefresh()}
@@ -227,6 +278,56 @@ export default function MapView({ orders = [], loading = false, error = null, on
                 </button>
               </>
             )}
+          </div>
+        </CollapsibleSection>
+
+        {/* ── Date range ── */}
+        <CollapsibleSection title="Date Range">
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-2 gap-1">
+              {DATE_PRESETS.map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => { setDatePreset(p.id); setCustomFrom(''); setCustomTo(''); }}
+                  className={[
+                    'text-left text-xs rounded px-2 py-1 transition-colors',
+                    datePreset === p.id
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700',
+                  ].join(' ')}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-col gap-1 pt-1 border-t border-slate-700">
+              <label className="text-[10px] uppercase tracking-wide text-slate-500">Custom range</label>
+              <div className="flex items-center gap-1">
+                <input
+                  type="date"
+                  value={customFrom}
+                  max={customTo || undefined}
+                  onChange={e => { setCustomFrom(e.target.value); setDatePreset('custom'); }}
+                  className="flex-1 min-w-0 text-xs rounded bg-slate-800 text-slate-200 px-2 py-1 border border-slate-700"
+                />
+                <span className="text-slate-500 text-xs">–</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  min={customFrom || undefined}
+                  onChange={e => { setCustomTo(e.target.value); setDatePreset('custom'); }}
+                  className="flex-1 min-w-0 text-xs rounded bg-slate-800 text-slate-200 px-2 py-1 border border-slate-700"
+                />
+              </div>
+              {datePreset === 'custom' && (customFrom || customTo) && (
+                <button
+                  onClick={() => { setDatePreset('all'); setCustomFrom(''); setCustomTo(''); }}
+                  className="self-start mt-1 text-blue-400 hover:text-blue-300 transition-colors text-xs"
+                >
+                  Clear range
+                </button>
+              )}
+            </div>
           </div>
         </CollapsibleSection>
 

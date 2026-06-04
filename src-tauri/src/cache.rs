@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 11;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -184,6 +184,107 @@ impl CacheDb {
             .map_err(|e| e.to_string())?;
         }
 
+        // ── v7: per-unit cost on inventory (for BOM + landed-cost calcs) ──────
+        if version < 7 {
+            match conn.execute(
+                "ALTER TABLE inventory ADD COLUMN unit_cost REAL NOT NULL DEFAULT 0",
+                [],
+            ) {
+                Ok(_) => {}
+                Err(e) if e.to_string().contains("duplicate column") => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            conn.execute_batch("PRAGMA user_version = 7;")
+                .map_err(|e| e.to_string())?;
+        }
+
+        // ── v8: listing → product-family links ───────────────────────────────
+        // Maps an Etsy listing (by title) to a product family identified by its
+        // SKU base (CATEGORY-DESIGN, e.g. "DBC-RBH"). One listing → one family;
+        // a family can back many listings (e.g. the same design in two shops).
+        // This is the spine that lets Listings inherit category/stock/file.
+        if version < 8 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS listing_product_links (
+                    product_name TEXT    NOT NULL PRIMARY KEY,
+                    sku_base     TEXT    NOT NULL,
+                    created_at   INTEGER NOT NULL
+                );
+                PRAGMA user_version = 8;",
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // ── v9: manual monthly ad spend ──────────────────────────────────────
+        // Etsy's Open API does not expose advertising spend, so it's entered by
+        // hand. Keyed by month "YYYY-MM"; amount in dollars.
+        if version < 9 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS ad_spend (
+                    month      TEXT    NOT NULL PRIMARY KEY,
+                    amount     REAL    NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL
+                );
+                PRAGMA user_version = 9;",
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // ── v10: per-shop ad spend ───────────────────────────────────────────
+        // Each Etsy shop is a separate account with its own monthly statement,
+        // so ad spend is now keyed by (shop_id, month). Pre-v10 rows had no shop
+        // attribution — migrate them to shop_id 0 ("unattributed"), where they
+        // still count toward the all-shops total until re-imported per shop.
+        if version < 10 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS ad_spend_v2 (
+                    shop_id    INTEGER NOT NULL DEFAULT 0,
+                    month      TEXT    NOT NULL,
+                    amount     REAL    NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL,
+                    PRIMARY KEY (shop_id, month)
+                );
+                INSERT INTO ad_spend_v2 (shop_id, month, amount, updated_at)
+                    SELECT 0, month, amount, updated_at FROM ad_spend;
+                DROP TABLE ad_spend;
+                ALTER TABLE ad_spend_v2 RENAME TO ad_spend;
+                PRAGMA user_version = 10;",
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        // ── v11: active-listing flag on catalog_products ─────────────────────
+        // catalog_products accumulates everything ever seen — both currently
+        // active Etsy listings AND old products that only appear in historical
+        // orders (e.g. a material ordered years ago, since delisted). This flag,
+        // refreshed by sync_active_listings, marks the rows that are live on the
+        // storefront right now so the Listings tab can hide delisted items.
+        // Seed existing rows active so upgrading does not blank the Listings tab
+        // before active-listing sync has succeeded with the new listings_r scope.
+        // Successful per-shop syncs will still clear delisted rows afterward.
+        if version < 11 {
+            match conn.execute(
+                "ALTER TABLE catalog_products ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1",
+                [],
+            ) {
+                Ok(_) => {}
+                Err(e) if e.to_string().contains("duplicate column") => {}
+                Err(e) => return Err(e.to_string()),
+            }
+            conn.execute_batch("PRAGMA user_version = 11;")
+            .map_err(|e| e.to_string())?;
+        }
+
+        let final_version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if final_version < SCHEMA_VERSION {
+            return Err(format!(
+                "cache schema migration incomplete: version {} < {}",
+                final_version, SCHEMA_VERSION
+            ));
+        }
+
         Ok(Self { conn: Mutex::new(conn) })
     }
 
@@ -285,7 +386,7 @@ impl CacheDb {
     pub fn get_inventory(&self) -> Result<Vec<crate::inventory::InventoryItem>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, item_type, material, width, height, thickness, quantity, sku, notes, created_at, updated_at
+            "SELECT id, item_type, material, width, height, thickness, quantity, sku, notes, unit_cost, created_at, updated_at
              FROM inventory ORDER BY item_type, material, width DESC, height DESC"
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
@@ -299,8 +400,9 @@ impl CacheDb {
                 quantity:   row.get(6)?,
                 sku:        row.get(7)?,
                 notes:      row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                unit_cost:  row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         }).map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
@@ -310,10 +412,10 @@ impl CacheDb {
         let conn = self.conn.lock().unwrap();
         let now = now_unix();
         conn.execute(
-            "INSERT INTO inventory (item_type, material, width, height, thickness, quantity, sku, notes, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+            "INSERT INTO inventory (item_type, material, width, height, thickness, quantity, sku, notes, unit_cost, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
             params![item.item_type, item.material, item.width, item.height,
-                    item.thickness, item.quantity, item.sku, item.notes, now],
+                    item.thickness, item.quantity, item.sku, item.notes, item.unit_cost, now],
         ).map_err(|e| e.to_string())?;
         let id = conn.last_insert_rowid();
         Ok(crate::inventory::InventoryItem {
@@ -326,6 +428,7 @@ impl CacheDb {
             quantity:   item.quantity,
             sku:        item.sku.clone(),
             notes:      item.notes.clone(),
+            unit_cost:  item.unit_cost,
             created_at: now,
             updated_at: now,
         })
@@ -357,9 +460,9 @@ impl CacheDb {
         let conn = self.conn.lock().unwrap();
         let rows = conn.execute(
             "UPDATE inventory SET item_type=?1, material=?2, width=?3, height=?4,
-             thickness=?5, quantity=?6, sku=?7, notes=?8, updated_at=?9 WHERE id=?10",
+             thickness=?5, quantity=?6, sku=?7, notes=?8, unit_cost=?9, updated_at=?10 WHERE id=?11",
             params![item.item_type, item.material, item.width, item.height,
-                    item.thickness, item.quantity, item.sku, item.notes, now_unix(), item.id],
+                    item.thickness, item.quantity, item.sku, item.notes, item.unit_cost, now_unix(), item.id],
         ).map_err(|e| e.to_string())?;
         if rows == 0 { Err(format!("inventory item {} not found", item.id)) } else { Ok(()) }
     }
@@ -622,7 +725,7 @@ impl CacheDb {
     pub fn list_catalog_products(&self) -> Result<Vec<CatalogProduct>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, product_name, shop_id, image_url, last_seen, created_at, updated_at
+            "SELECT id, product_name, shop_id, image_url, last_seen, created_at, updated_at, is_active
              FROM catalog_products ORDER BY shop_id, product_name COLLATE NOCASE"
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
@@ -634,6 +737,117 @@ impl CacheDb {
                 last_seen:    row.get(4)?,
                 created_at:   row.get(5)?,
                 updated_at:   row.get(6)?,
+                is_active:    row.get::<_, i64>(7)? != 0,
+            })
+        }).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// Replace the active-listing flags for one shop: every row for that shop is
+    /// reset to inactive, then the supplied product names (the listings Etsy
+    /// reports as active right now) are flagged active. Run after upserting a
+    /// shop's active listings so delisted items get unflagged automatically.
+    /// Done in a single transaction so the Listings tab never sees a half-updated
+    /// state. Only call when the active-listings fetch for the shop succeeded —
+    /// otherwise a failed fetch would wrongly clear every flag.
+    pub fn mark_shop_listings_active(&self, shop_id: i64, active_names: &[String]) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE catalog_products SET is_active = 0 WHERE shop_id = ?1",
+            params![shop_id],
+        ).map_err(|e| e.to_string())?;
+        for name in active_names {
+            tx.execute(
+                "UPDATE catalog_products SET is_active = 1 WHERE shop_id = ?1 AND product_name = ?2",
+                params![shop_id, name],
+            ).map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    // ── Listing → product-family links ───────────────────────────────────────
+
+    /// Link a listing (by title) to a product family (SKU base, e.g. "DBC-RBH").
+    pub fn link_listing_product(&self, product_name: &str, sku_base: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO listing_product_links (product_name, sku_base, created_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(product_name) DO UPDATE SET sku_base = excluded.sku_base",
+            params![product_name, sku_base.to_uppercase(), now_unix()],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Remove a listing's product-family link.
+    pub fn unlink_listing_product(&self, product_name: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM listing_product_links WHERE product_name = ?1",
+            params![product_name],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_listing_product_links(&self) -> Result<Vec<ListingProductLink>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT product_name, sku_base FROM listing_product_links"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ListingProductLink {
+                product_name: row.get(0)?,
+                sku_base:     row.get(1)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    /// Seed links from existing Lightburn mappings: each mapped listing already
+    /// points at a file whose `sku_base` is exactly the product family. Existing
+    /// links are left untouched (INSERT OR IGNORE) so manual links win.
+    /// Returns the number of links created.
+    pub fn seed_listing_links_from_mappings(&self) -> Result<usize, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_unix();
+        let count = conn.execute(
+            "INSERT OR IGNORE INTO listing_product_links (product_name, sku_base, created_at)
+             SELECT m.product_name, UPPER(f.sku_base), ?1
+             FROM lightburn_mappings m
+             JOIN lightburn_files f ON f.id = m.lightburn_file_id
+             WHERE f.sku_base IS NOT NULL AND f.sku_base != ''",
+            params![now],
+        ).map_err(|e| e.to_string())?;
+        Ok(count)
+    }
+
+    // ── Ad spend (per-shop monthly entry / statement import) ─────────────────
+
+    /// Set (upsert) the ad spend for one shop in a month ("YYYY-MM"). Amount in
+    /// dollars. Keyed by (shop_id, month), so writing one shop's month never
+    /// touches another shop or another month.
+    pub fn set_ad_spend(&self, shop_id: u64, month: &str, amount: f64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ad_spend (shop_id, month, amount, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(shop_id, month) DO UPDATE SET amount = excluded.amount, updated_at = excluded.updated_at",
+            params![shop_id as i64, month, amount, now_unix()],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn list_ad_spend(&self) -> Result<Vec<AdSpend>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT shop_id, month, amount FROM ad_spend ORDER BY shop_id, month"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AdSpend {
+                shop_id: row.get::<_, i64>(0)? as u64,
+                month:   row.get(1)?,
+                amount:  row.get(2)?,
             })
         }).map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
@@ -762,10 +976,16 @@ pub struct CatalogProduct {
     pub last_seen:    Option<String>,
     pub created_at:   i64,
     pub updated_at:   i64,
+    /// True if this product is a listing currently live on the Etsy storefront
+    /// (as of the last active-listings sync). False for delisted items and
+    /// products that only ever appeared in historical orders.
+    pub is_active:    bool,
 }
 
 /// Sent by the frontend when syncing products from orders.
+/// JS sends camelCase keys (productName, shopId, …) so we rename accordingly.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CatalogProductInput {
     pub product_name: String,
     pub shop_id:      i64,
@@ -782,6 +1002,22 @@ pub struct CatalogFile {
     pub filename:     String,
     pub file_size:    i64,
     pub created_at:   i64,
+}
+
+/// A listing (by title) linked to a product family (SKU base, e.g. "DBC-RBH").
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ListingProductLink {
+    pub product_name: String,
+    pub sku_base:     String,
+}
+
+/// Ad spend for one shop in a month ("YYYY-MM"), in dollars. shop_id 0 means
+/// "unattributed" (pre-v10 rows entered before per-shop tracking existed).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AdSpend {
+    pub shop_id: u64,
+    pub month:   String,
+    pub amount:  f64,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -843,6 +1079,53 @@ pub fn sync_catalog_products(
 #[tauri::command]
 pub fn list_catalog_products(cache: State<'_, CacheDb>) -> Result<Vec<CatalogProduct>, String> {
     cache.list_catalog_products()
+}
+
+// ── Listing → product-family link commands ──────────────────────────────────
+
+/// Link a listing (by title) to a product family (SKU base, e.g. "DBC-RBH").
+#[tauri::command]
+pub fn link_listing_product(
+    product_name: String,
+    sku_base: String,
+    cache: State<'_, CacheDb>,
+) -> Result<(), String> {
+    cache.link_listing_product(&product_name, &sku_base)
+}
+
+/// Remove a listing's product-family link.
+#[tauri::command]
+pub fn unlink_listing_product(
+    product_name: String,
+    cache: State<'_, CacheDb>,
+) -> Result<(), String> {
+    cache.unlink_listing_product(&product_name)
+}
+
+/// List all listing → product-family links.
+#[tauri::command]
+pub fn list_listing_product_links(cache: State<'_, CacheDb>) -> Result<Vec<ListingProductLink>, String> {
+    cache.list_listing_product_links()
+}
+
+/// Seed links from existing Lightburn mappings. Returns count of new links.
+#[tauri::command]
+pub fn seed_listing_links_from_mappings(cache: State<'_, CacheDb>) -> Result<usize, String> {
+    cache.seed_listing_links_from_mappings()
+}
+
+// ── Ad spend commands ───────────────────────────────────────────────────────
+
+/// Set the ad spend for one shop in a month ("YYYY-MM").
+#[tauri::command]
+pub fn set_ad_spend(shop_id: u64, month: String, amount: f64, cache: State<'_, CacheDb>) -> Result<(), String> {
+    cache.set_ad_spend(shop_id, &month, amount)
+}
+
+/// List all manually-entered monthly ad spend.
+#[tauri::command]
+pub fn list_ad_spend(cache: State<'_, CacheDb>) -> Result<Vec<AdSpend>, String> {
+    cache.list_ad_spend()
 }
 
 /// Attach a file (.svg, .zip, etc.) to a catalog product.

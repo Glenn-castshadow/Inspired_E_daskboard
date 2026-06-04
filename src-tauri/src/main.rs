@@ -31,8 +31,15 @@ fn main() {
         .manage(usps::UspsState::new())
         .manage(etsy::EtsyState::new())
         // Shared reqwest client — one instance, reused for all HTTP calls.
-        // reqwest::Client is already Arc-backed so cloning is cheap.
-        .manage(reqwest::Client::new())
+        // reqwest::Client is already Arc-backed so cloning is cheap. Timeouts
+        // are set so no HTTP call can hang the UI indefinitely.
+        .manage(
+            reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
+        )
         .setup(|app| {
             // Tauri v2: path resolver moved from app.path_resolver() to app.path()
             // and returns Result instead of Option.
@@ -65,6 +72,9 @@ fn main() {
             etsy::set_etsy_shop_credentials,
             etsy::etsy_connect,
             etsy::get_orders,
+            etsy::get_cached_orders,
+            etsy::get_open_orders,
+            etsy::sync_active_listings,
             etsy::get_connected_shops,
             etsy::disconnect_shop,
             etsy::create_receipt_shipment,
@@ -102,6 +112,12 @@ fn main() {
             cache::clear_cache,
             cache::sync_catalog_products,
             cache::list_catalog_products,
+            cache::link_listing_product,
+            cache::unlink_listing_product,
+            cache::list_listing_product_links,
+            cache::seed_listing_links_from_mappings,
+            cache::set_ad_spend,
+            cache::list_ad_spend,
             cache::save_catalog_file,
             cache::list_catalog_files,
             cache::delete_catalog_file,

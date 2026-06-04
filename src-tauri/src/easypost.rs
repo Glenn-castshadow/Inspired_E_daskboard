@@ -33,7 +33,12 @@ pub struct EasyPostState {
 impl EasyPostState {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            // Timeouts so a stalled EasyPost call can't hang the UI indefinitely.
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             api_key: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
         }

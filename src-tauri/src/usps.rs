@@ -91,7 +91,12 @@ pub struct UspsToken {
 impl UspsState {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            // Timeouts so a stalled USPS call can't hang the UI indefinitely.
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             client_id: Mutex::new(None),
             client_secret: Mutex::new(None),
             token: Mutex::new(None),

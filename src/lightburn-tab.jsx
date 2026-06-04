@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { CATEGORIES } from "./inventory-tab.jsx";
+import { CATEGORIES } from "./taxonomy.js";
+import { SHOP_META } from "./config.js";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -395,6 +396,83 @@ function FileCombobox({ files, value, onChange, disabled }) {
   );
 }
 
+// ── Catalog stats tile ────────────────────────────────────────────────────────
+
+function StatsTile({ orders, mappings }) {
+  // First shop_id seen for each unique product name
+  const shopByProduct = {};
+  for (const o of orders ?? []) {
+    if (o.product_name && shopByProduct[o.product_name] === undefined) {
+      shopByProduct[o.product_name] = o.shop_id ?? 0;
+    }
+  }
+  const linkedSet = new Set((mappings ?? []).map(m => m.product_name));
+
+  // Per-shop tallies: { shopId: { total, linked } }
+  const tally = {};
+  for (const [name, shopId] of Object.entries(shopByProduct)) {
+    if (!tally[shopId]) tally[shopId] = { total: 0, linked: 0 };
+    tally[shopId].total += 1;
+    if (linkedSet.has(name)) tally[shopId].linked += 1;
+  }
+
+  const totalProducts = Object.keys(shopByProduct).length;
+  const totalLinked   = Object.values(tally).reduce((s, t) => s + t.linked, 0);
+  const totalUnlinked = totalProducts - totalLinked;
+
+  // Order shops by SHOP_IDS preference, unknowns last
+  const known   = [7438218, 6807617, 22660031].filter(id => tally[id]);
+  const unknown = Object.keys(tally).map(Number).filter(id => !known.includes(id));
+  const shopOrder = [...known, ...unknown];
+
+  const Row = ({ label, total, unlinked, color, bold }) => (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+        {color && <span style={{ display: "inline-block", width: 3, height: 13, borderRadius: 2, background: color }} />}
+        <span style={{
+          fontFamily: "'DM Sans', sans-serif", fontSize: 12,
+          fontWeight: bold ? 600 : 500, color: "var(--text)",
+        }}>
+          {label}
+        </span>
+        <span style={{ marginLeft: "auto", fontFamily: "monospace", fontSize: 14, fontWeight: 700, color: "var(--text)" }}>
+          {total}
+        </span>
+      </div>
+      <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: unlinked > 0 ? "#b45a00" : "var(--text-faint)", paddingLeft: color ? 10 : 0 }}>
+        {unlinked > 0 ? `${unlinked} without a file` : "all linked ✓"}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{
+      width: 240, flexShrink: 0,
+      border: "1px solid var(--border)", borderRadius: 8,
+      background: "var(--bg-surface)", padding: "16px 18px", alignSelf: "flex-start",
+    }}>
+      <div style={{
+        fontFamily: "'DM Sans', sans-serif", fontSize: 10, textTransform: "uppercase",
+        letterSpacing: "0.09em", color: "var(--text-faint)", marginBottom: 14,
+      }}>
+        Listing coverage
+      </div>
+
+      {shopOrder.map(shopId => {
+        const meta = SHOP_META[shopId] ?? { name: shopId === 0 ? "Unknown" : `Shop ${shopId}`, color: "#888" };
+        const t = tally[shopId];
+        return (
+          <Row key={shopId} label={meta.name} color={meta.color} total={t.total} unlinked={t.total - t.linked} />
+        );
+      })}
+
+      <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 }}>
+        <Row label="All listings" total={totalProducts} unlinked={totalUnlinked} bold />
+      </div>
+    </div>
+  );
+}
+
 // ── Match Products panel ──────────────────────────────────────────────────────
 
 function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
@@ -403,6 +481,14 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
 
   // Unique product names from all orders, sorted
   const productNames = [...new Set((orders ?? []).map(o => o.product_name).filter(Boolean))].sort();
+
+  // Product name → first available listing thumbnail
+  const imageByProduct = {};
+  for (const o of orders ?? []) {
+    if (o.product_name && o.image_url && !imageByProduct[o.product_name]) {
+      imageByProduct[o.product_name] = o.image_url;
+    }
+  }
 
   if (productNames.length === 0) {
     return (
@@ -469,12 +555,13 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
 
       {/* Column header */}
       <div style={{
-        display: "grid", gridTemplateColumns: "1fr 240px 20px",
+        display: "grid", gridTemplateColumns: "44px 1fr 240px 20px",
         gap: 14, padding: "7px 16px", background: "var(--bg-muted)",
         fontFamily: "'DM Sans', sans-serif", fontSize: 10,
         textTransform: "uppercase", letterSpacing: "0.09em", color: "var(--text-faint)",
         borderBottom: "1px solid var(--border)",
       }}>
+        <span />
         <span>Etsy product name</span>
         <span>Lightburn file</span>
         <span style={{ textAlign: "center" }}>✓</span>
@@ -490,14 +577,30 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
           const isS = saving[name];
           return (
             <div key={name} style={{
-              display: "grid", gridTemplateColumns: "1fr 240px 20px",
+              display: "grid", gridTemplateColumns: "44px 1fr 240px 20px",
               alignItems: "center", gap: 14, padding: "9px 16px",
               borderTop: "1px solid var(--border)", background: "var(--bg-surface)",
             }}>
               <div style={{
-                fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text)",
-                whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                width: 36, height: 36, borderRadius: 5, overflow: "hidden",
+                background: "var(--bg-muted)", flexShrink: 0,
+                display: "flex", alignItems: "center", justifyContent: "center",
               }}>
+                {imageByProduct[name] ? (
+                  <img src={imageByProduct[name]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    onError={e => { e.currentTarget.style.display = "none"; }} />
+                ) : (
+                  <span style={{ color: "var(--text-faint)", fontSize: 16 }}>◻</span>
+                )}
+              </div>
+              <div
+                title={decodeHtml(name)}
+                style={{
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text)", lineHeight: 1.35,
+                  display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                  overflow: "hidden", textOverflow: "ellipsis",
+                }}
+              >
                 {decodeHtml(name)}
               </div>
               <FileCombobox
@@ -650,6 +753,19 @@ export default function LightburnTab({ orders = [] }) {
     }
   };
 
+  // ── Export from library ─────────────────────────────────────────────────────
+  const handleExportLib = async (file) => {
+    try {
+      if (isTauri) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const path = await invoke("export_lightburn_file", { lightburnFileId: file.id, filename: file.filename });
+        showToast(`Saved → ${path}`);
+      }
+    } catch (e) {
+      showToast(String(e), true);
+    }
+  };
+
   // ── Edit ────────────────────────────────────────────────────────────────────
   const handleEdit = async ({ skuBase, shortName }) => {
     if (!editFile) return;
@@ -686,7 +802,7 @@ export default function LightburnTab({ orders = [] }) {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: "32px 40px", maxWidth: 900 }}>
+    <div style={{ padding: "32px 40px", maxWidth: 1180 }}>
 
       <div style={{ marginBottom: 28 }}>
         <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>
@@ -694,7 +810,7 @@ export default function LightburnTab({ orders = [] }) {
         </h2>
         <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
           One Lightburn file per base product. Drag a .lbrn2 onto this window or click below to add it to the library.
-          Link products to files here, then browse the Catalog tab.
+          Link products to files here, then browse the Listings tab.
         </p>
       </div>
 
@@ -775,7 +891,10 @@ export default function LightburnTab({ orders = [] }) {
                   <span style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{f.sku_base}</span>
                   <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text)" }}>{f.short_name}</span>
                   <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-faint)" }}>{f.filename}</span>
-                  <div style={{ display: "flex", gap: 2 }}>
+                  <div style={{ display: "flex", gap: 2, alignItems: "center" }}>
+                    <button onClick={() => handleExportLib(f)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 14, padding: "2px 6px" }}
+                      title="Download to Desktop\Lightburn_Exports">↓</button>
                     <button onClick={() => setEditFile(f)}
                       style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: 13, padding: "2px 6px" }}
                       title="Edit details">✎</button>
@@ -798,12 +917,17 @@ export default function LightburnTab({ orders = [] }) {
           The Queue Cut button uses these links automatically.
         </p>
         {!loading && (
-          <MatchProductsPanel
-            orders={orders}
-            files={files}
-            mappings={mappings}
-            onMappingChange={load}
-          />
+          <div style={{ display: "flex", gap: 20, alignItems: "flex-start" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <MatchProductsPanel
+                orders={orders}
+                files={files}
+                mappings={mappings}
+                onMappingChange={load}
+              />
+            </div>
+            <StatsTile orders={orders} mappings={mappings} />
+          </div>
         )}
       </div>
 
