@@ -7,6 +7,7 @@ mod catalog;
 // The easypost.rs file remains in the repo for git history but is no longer compiled.
 mod etsy;
 mod inventory;
+mod lightburn;
 mod settings;
 mod usps;
 
@@ -47,6 +48,10 @@ fn main() {
             );
             app.manage(settings::AppSettings::load(&data_dir));
 
+            let lightburn_dir = data_dir.join("lightburn");
+            std::fs::create_dir_all(&lightburn_dir)?;
+            app.manage(lightburn::LightburnState { lib_dir: lightburn_dir });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +82,17 @@ fn main() {
             catalog::add_product,
             catalog::update_product,
             catalog::delete_product,
+            // Lightburn production file library
+            lightburn::read_file_as_base64,
+            lightburn::list_lightburn_files,
+            lightburn::save_lightburn_file,
+            lightburn::update_lightburn_file,
+            lightburn::delete_lightburn_file,
+            lightburn::queue_cut_job,
+            lightburn::export_lightburn_file,
+            lightburn::list_lightburn_mappings,
+            lightburn::save_lightburn_mapping,
+            lightburn::delete_lightburn_mapping,
             // Settings
             settings::get_settings,
             settings::save_settings,
@@ -84,6 +100,12 @@ fn main() {
             // Cache
             cache::cache_status,
             cache::clear_cache,
+            cache::sync_catalog_products,
+            cache::list_catalog_products,
+            cache::save_catalog_file,
+            cache::list_catalog_files,
+            cache::delete_catalog_file,
+            cache::export_catalog_file,
             // Devtools
             open_devtools,
             close_devtools,

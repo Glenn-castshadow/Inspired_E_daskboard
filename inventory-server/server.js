@@ -11,7 +11,7 @@ const requireApiKey = require('./middleware/auth');
 const app = express();
 
 app.use(cors({ origin: false }));   // same-network clients only, no browser CORS needed
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));  // Lightburn files sent as base64 can be several MB
 
 // ── Health check (no auth — lets the Tauri app test connectivity) ─────────────
 app.get('/health', (_req, res) => {
@@ -21,8 +21,9 @@ app.get('/health', (_req, res) => {
 // ── All routes below require a valid API key ─────────────────────────────────
 app.use(requireApiKey);
 
-app.use('/inventory', require('./routes/inventory'));
-app.use('/products',  require('./routes/products'));
+app.use('/inventory',  require('./routes/inventory'));
+app.use('/products',   require('./routes/products'));
+app.use('/lightburn',  require('./routes/lightburn'));
 
 // ── Global error handler ─────────────────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars

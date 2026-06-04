@@ -3,16 +3,24 @@ import FulfillmentView, { MOCK_ORDERS } from "./fulfillment-view.jsx";
 import EtsyDashboard from "./etsy-dashboard.jsx";
 import MapView from "./map-tab/MapView.jsx";
 import InventoryTab from "./inventory-tab.jsx";
+import LightburnTab from "./lightburn-tab.jsx";
+import CatalogTab from "./catalog-tab.jsx";
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
 import { SHOP_IDS } from "./config.js";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
-const TABS = [
-  { key: "fulfillment", label: "Fulfillment" },
-  { key: "analytics",   label: "Analytics"   },
-  { key: "inventory",   label: "Inventory"   },
-  { key: "map",         label: "Map"         },
+const TAB_GROUPS = [
+  [
+    { key: "fulfillment", label: "Fulfillment" },
+    { key: "inventory",   label: "Inventory"   },
+    { key: "catalog",     label: "Catalog"     },
+    { key: "ingest",      label: "Ingest"      },
+  ],
+  [
+    { key: "analytics",   label: "Analytics"   },
+    { key: "map",         label: "Map"         },
+  ],
 ];
 
 export default function App() {
@@ -57,6 +65,29 @@ export default function App() {
       setOrders(data);
       setLastUpdated(new Date());
       hasDataRef.current = true;
+
+      // Persist unique products into the durable catalog table so they survive
+      // listing deletion, orders cache clears, or pagination gaps.
+      const seen = new Map();
+      for (const o of data) {
+        if (!o.product_name) continue;
+        const ex = seen.get(o.product_name);
+        const date = o.received_date ?? null;
+        const img  = o.image_url ?? null;
+        if (!ex) {
+          seen.set(o.product_name, {
+            productName: o.product_name,
+            shopId: o.shop_id ?? 0,
+            imageUrl: img,
+            lastSeen: date,
+          });
+        } else {
+          if (date && (!ex.lastSeen || date > ex.lastSeen)) ex.lastSeen = date;
+          if (img && !ex.imageUrl) ex.imageUrl = img;
+          if (o.shop_id && !ex.shopId) ex.shopId = o.shop_id;
+        }
+      }
+      invoke("sync_catalog_products", { items: [...seen.values()] }).catch(() => {});
     } catch (e) {
       setOrdersError(String(e));
     } finally {
@@ -115,30 +146,41 @@ export default function App() {
         top: 0,
         zIndex: 10,
       }}>
-        {TABS.map(tab => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            style={{
-              padding: "8px 16px 10px",
-              background: "none",
-              border: "none",
-              borderBottom: activeTab === tab.key
-                ? "2px solid var(--accent)"
-                : "2px solid transparent",
-              marginBottom: "-1px",
-              cursor: "pointer",
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: 13,
-              fontWeight: activeTab === tab.key ? 600 : 400,
-              color: activeTab === tab.key ? "var(--accent)" : "var(--text-faint)",
-              letterSpacing: "0.01em",
-              transition: "color 0.15s, border-color 0.15s",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {tab.label}
-          </button>
+        {TAB_GROUPS.map((group, gi) => (
+          <div key={gi} style={{ display: "flex", alignItems: "flex-end", gap: 2 }}>
+            {gi > 0 && (
+              <div style={{
+                width: 1, height: 20, background: "var(--border)",
+                margin: "0 10px 12px",
+                alignSelf: "flex-end",
+              }} />
+            )}
+            {group.map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                style={{
+                  padding: "8px 16px 10px",
+                  background: "none",
+                  border: "none",
+                  borderBottom: activeTab === tab.key
+                    ? "2px solid var(--accent)"
+                    : "2px solid transparent",
+                  marginBottom: "-1px",
+                  cursor: "pointer",
+                  fontFamily: "'DM Sans', sans-serif",
+                  fontSize: 13,
+                  fontWeight: activeTab === tab.key ? 600 : 400,
+                  color: activeTab === tab.key ? "var(--accent)" : "var(--text-faint)",
+                  letterSpacing: "0.01em",
+                  transition: "color 0.15s, border-color 0.15s",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         ))}
 
         {/* Background refresh indicator */}
@@ -188,6 +230,8 @@ export default function App() {
       {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "inventory"   && <InventoryTab />}
+      {activeTab === "catalog"     && <CatalogTab />}
+      {activeTab === "ingest"      && <LightburnTab orders={orders} />}
       {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
     </div>
   );

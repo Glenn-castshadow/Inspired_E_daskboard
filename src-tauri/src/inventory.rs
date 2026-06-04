@@ -97,6 +97,23 @@ pub(crate) async fn http_put<B: Serialize>(
     Ok(())
 }
 
+/// PUT and deserialize the response body as JSON — for endpoints that return the updated object.
+pub(crate) async fn http_put_json<T: serde::de::DeserializeOwned, B: Serialize>(
+    http: &reqwest::Client,
+    url: &str,
+    api_key: &str,
+    body: &B,
+) -> Result<T, String> {
+    let resp = http.put(url).bearer_auth(api_key).json(body).send().await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let b = resp.text().await.unwrap_or_default();
+        return Err(format!("Server error {}: {}", status, b));
+    }
+    resp.json().await.map_err(|e| e.to_string())
+}
+
 pub(crate) async fn http_patch<B: Serialize, T: serde::de::DeserializeOwned>(
     http: &reqwest::Client,
     url: &str,

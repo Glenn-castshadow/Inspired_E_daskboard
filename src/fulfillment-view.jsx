@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { SHOP_META } from "./config";
+import { QueueCutWidget } from "./lightburn-tab.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -421,7 +422,10 @@ function OrderRow({ order, expanded, onToggle, trackingEntry, onTrackingLoad, is
             </div>
           )}
           {!isShipped && (
-            <MarkShippedForm order={order} onShipped={onShipped} />
+            <>
+              <QueueCutWidget order={order} />
+              <MarkShippedForm order={order} onShipped={onShipped} />
+            </>
           )}
         </div>
       )}

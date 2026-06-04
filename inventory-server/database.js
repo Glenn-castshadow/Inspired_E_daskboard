@@ -37,6 +37,26 @@ db.exec(`
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL
   );
+
+  -- One .lbrn2 file per base product (no finish in the key).
+  -- filename is the canonical name: e.g. DBC-RBH_doorbell-chime-round.lbrn2
+  -- The actual file lives at LIGHTBURN_DIR/filename on the host.
+  CREATE TABLE IF NOT EXISTS lightburn_files (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku_base    TEXT    NOT NULL UNIQUE,
+    short_name  TEXT    NOT NULL,
+    filename    TEXT    NOT NULL UNIQUE,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+
+  -- Maps an Etsy product_name → lightburn_file_id so Queue Cut can auto-resolve.
+  CREATE TABLE IF NOT EXISTS lightburn_mappings (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_name      TEXT    NOT NULL UNIQUE,
+    lightburn_file_id INTEGER NOT NULL REFERENCES lightburn_files(id) ON DELETE CASCADE,
+    created_at        INTEGER NOT NULL
+  );
 `);
 
 console.log(`[db] SQLite open: ${dbPath}`);
