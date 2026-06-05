@@ -35,6 +35,7 @@ export default function App() {
   const [ordersError, setOrdersError]     = useState(null);
   const [lastUpdated, setLastUpdated]     = useState(null);
   const [listingSync, setListingSync]     = useState({ state: "idle", results: [], updatedAt: null });
+  const [categoryBlankSizes, setCategoryBlankSizes] = useState([]);
 
   // Tracks whether we've shown data at least once — avoids blocking spinner
   // on subsequent refreshes. Using a ref so loadOrders stays stable (no dep).
@@ -224,6 +225,16 @@ export default function App() {
       .then(() => loadOpenOrders())
       .then(() => loadOrders(true));
     const interval = setInterval(() => loadOrders(true), 30 * 60 * 1000);
+
+    // Load category blank sizes once — these change rarely (manual config).
+    if (isTauri) {
+      import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("get_category_blank_sizes")
+          .then(setCategoryBlankSizes)
+          .catch((e) => console.error("get_category_blank_sizes failed:", e))
+      );
+    }
+
     return () => clearInterval(interval);
   }, [loadCachedOrders, loadOpenOrders, loadOrders]);
 
@@ -363,7 +374,7 @@ export default function App() {
       </div>
 
       {/* Active view */}
-      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} />}
+      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} categoryBlankSizes={categoryBlankSizes} />}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "inventory"   && <InventoryTab />}
       {activeTab === "catalog"     && <CatalogTab activeListingSync={listingSync} />}
