@@ -131,6 +131,13 @@ export const MOCK_ORDERS = [
   },
 ];
 
+const MOCK_CATEGORY_BLANK_SIZES = [
+  { category: "ORN", min_width: 6,  min_height: 6  },
+  { category: "DBC", min_width: 10, min_height: 14 },
+  { category: "WAL", min_width: 12, min_height: 18 },
+  { category: "LMP", min_width: 16, min_height: 24 },
+];
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 // Local midnight avoids UTC/local offset causing wrong day counts
@@ -246,8 +253,63 @@ function FamilyBadge({ family, dim }) {
   );
 }
 
+// ── Offcut availability badge ────────────────────────────────────────────────
+function OffcutBadge({ matches }) {
+  const [open, setOpen] = useState(false);
+  if (!matches || matches.length === 0) return null;
+  return (
+    <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(o => !o); }}
+        title={`${matches.length} offcut${matches.length > 1 ? "s" : ""} available`}
+        style={{
+          background: "#1a2e1a", border: "1px solid #3a6a3a",
+          borderRadius: 4, padding: "1px 7px",
+          fontSize: 10, fontFamily: "'DM Sans', sans-serif",
+          color: "#66cc66", cursor: "pointer",
+          display: "inline-flex", alignItems: "center", gap: 4,
+          whiteSpace: "nowrap",
+        }}
+      >
+        ✂ {matches.length} offcut{matches.length > 1 ? "s" : ""}
+      </button>
+      {open && (
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "calc(100% + 4px)", left: 0,
+            background: "var(--bg-surface)", border: "1px solid var(--border)",
+            borderRadius: 8, padding: 10, zIndex: 20, minWidth: 220,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          }}
+        >
+          <div style={{
+            fontSize: 10, fontWeight: 700, color: "var(--text-muted)",
+            textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6,
+          }}>
+            Matching offcuts
+          </div>
+          {matches.map((item, i) => (
+            <div key={i} style={{
+              fontSize: 12, fontFamily: "'DM Sans', sans-serif",
+              padding: "5px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none",
+              color: "var(--text)",
+            }}>
+              <span style={{ fontFamily: "monospace", fontSize: 11, color: "var(--text-muted)", marginRight: 6 }}>
+                {item.label_id?.slice(0, 8).toUpperCase() ?? "—"}
+              </span>
+              {item.material.replace(/_/g, " ")} · {item.width}" × {item.height}"
+              {item.notes ? ` · ${item.notes}` : ""}
+            </div>
+          ))}
+        </div>
+      )}
+    </span>
+  );
+}
+
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, family, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
+function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
   useEffect(() => {
     if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
     onTrackingLoad(order.id, order.tracking_code);
@@ -346,6 +408,7 @@ function OrderRow({ order, family, expanded, onToggle, trackingEntry, onTracking
               {shop.name}
             </span>
             <FamilyBadge family={family} dim={isShipped} />
+            <OffcutBadge matches={offcutMatches} />
             <span style={{ fontSize: 12, color: "#aaa", fontFamily: "'DM Sans', sans-serif" }}>
               {order.id} · {decodeHtml(order.buyer)}
             </span>
@@ -597,7 +660,7 @@ function ColHeader({ label }) {
 }
 
 // ── Main View ─────────────────────────────────────────────────────────────────
-export default function FulfillmentView({ theme = "light", orders = [], loading = false, error = null, lastUpdated = null, onRefresh }) {
+export default function FulfillmentView({ theme = "light", orders = [], loading = false, error = null, lastUpdated = null, onRefresh, categoryBlankSizes = [] }) {
   const isDark = theme === "dark";
   const [filter, setFilter] = useState("open");
   const [expandedId, setExpandedId] = useState(null);
@@ -622,6 +685,41 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
     }
     return m;
   }, [links]);
+
+  // Load inventory once on mount so the offcut badge can filter labelled offcuts.
+  // In non-Tauri (Vite preview) mode inventoryItems stays empty — badge is absent, which is fine.
+  const [inventoryItems, setInventoryItems] = useState([]);
+  useEffect(() => {
+    if (!isTauri) return;
+    import("@tauri-apps/api/core").then(({ invoke }) =>
+      invoke("get_inventory").then(setInventoryItems).catch(() => {})
+    );
+  }, []);
+
+  // Map category → { min_width, min_height } for O(1) lookup per order row.
+  const blankSizeByCategory = useMemo(() => {
+    const m = {};
+    for (const s of categoryBlankSizes) m[s.category.toUpperCase()] = s;
+    return m;
+  }, [categoryBlankSizes]);
+
+  // All tracked offcuts currently in stock (quantity > 0, has a label assigned).
+  const availableOffcuts = useMemo(() => {
+    return inventoryItems.filter(
+      item => item.item_type === "offcut" && item.quantity > 0 && item.label_id
+    );
+  }, [inventoryItems]);
+
+  const offcutMatchesFor = useCallback((productName) => {
+    const family = familyByProduct[productName];
+    if (!family?.base) return [];
+    const category = family.base.split("-")[0].toUpperCase();
+    const sizeReq = blankSizeByCategory[category];
+    if (!sizeReq) return [];
+    return availableOffcuts.filter(
+      item => item.width >= sizeReq.min_width && item.height >= sizeReq.min_height
+    );
+  }, [familyByProduct, blankSizeByCategory, availableOffcuts]);
 
   const toggleSelected = useCallback((id) => {
     setSelectedIds(prev => {
@@ -887,6 +985,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
             key={order.id}
             order={order}
             family={familyByProduct[order.product_name]}
+            offcutMatches={offcutMatchesFor(order.product_name)}
             expanded={expandedId === order.id}
             onToggle={() => setExpandedId(expandedId === order.id ? null : order.id)}
             trackingEntry={trackingCache[order.id]}
