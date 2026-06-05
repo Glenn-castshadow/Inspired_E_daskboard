@@ -1,6 +1,6 @@
 [package]
 name = "etsy-dashboard"
-version = "0.1.75"
+version = "0.1.76"
 edition = "2021"
 build = "build.rs"
 
@@ -31,6 +31,7 @@ keyring = "2"
 
 # Etsy OAuth 2.0 + PKCE
 rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
 base64 = "0.21"
 sha2 = "0.10"
 chrono = "0.4"
