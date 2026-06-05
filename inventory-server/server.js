@@ -21,6 +21,9 @@ app.get('/health', (_req, res) => {
 // Scan routes — no auth required (iPhone users, no API key)
 app.use('/m', require('./routes/scan'));
 
+// Label routes — per-route auth (print/qr public, generate/counts protected)
+app.use('/labels', require('./routes/labels'));
+
 // ── All routes below require a valid API key ─────────────────────────────────
 app.use(requireApiKey);
 
