@@ -802,7 +802,11 @@ export default function LightburnTab({ orders = [] }) {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{ padding: "32px 40px", maxWidth: 1180 }}>
+    <div style={{
+      height: "calc(100vh - 48px)",
+      display: "flex", flexDirection: "column", overflow: "hidden",
+      padding: "32px 40px 0", maxWidth: 1180,
+    }}>
 
       <div style={{ marginBottom: 28 }}>
         <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>
@@ -850,6 +854,9 @@ export default function LightburnTab({ orders = [] }) {
           {saveError}
         </div>
       )}
+
+      {/* Library + orders — scrollable */}
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 48 }}>
 
       {/* Library */}
       <div style={{ marginBottom: 36 }}>
@@ -963,6 +970,8 @@ export default function LightburnTab({ orders = [] }) {
           </div>
         </div>
       )}
+
+      </div> {/* end scrollable area */}
 
       {toast && (
         <div style={{

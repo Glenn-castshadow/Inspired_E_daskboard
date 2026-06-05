@@ -1221,9 +1221,10 @@ export default function InventoryTab() {
 
   return (
     <div style={{
-      minHeight: "100vh",
+      height: "calc(100vh - 48px)",
+      display: "flex", flexDirection: "column", overflow: "hidden",
       background: "var(--bg-canvas)",
-      padding: "32px 40px",
+      padding: "32px 40px 0",
       fontFamily: "'DM Sans', sans-serif",
     }}>
       <LabelPool serverUrl={serverUrl} />
@@ -1296,6 +1297,9 @@ export default function InventoryTab() {
         ))}
       </div>
 
+      {/* Scrollable content area */}
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 48 }}>
+
       {/* Error */}
       {error && (
         <div style={{
@@ -1358,6 +1362,8 @@ export default function InventoryTab() {
           onDeleteProduct={deleteProduct}
         />
       )}
+
+      </div> {/* end scrollable content area */}
 
       {/* Edit inventory item modal */}
       {editingItem && (

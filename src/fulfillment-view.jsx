@@ -776,9 +776,10 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
 
   return (
     <div style={{
-      minHeight: "100vh",
+      height: "calc(100vh - 48px)",
+      display: "flex", flexDirection: "column", overflow: "hidden",
       background: "var(--bg-canvas)",
-      padding: "32px 40px",
+      padding: "32px 40px 0",
       fontFamily: "'DM Sans', sans-serif",
       color: "var(--text)",
     }}>
@@ -946,8 +947,8 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
         <div />
       </div>
 
-      {/* Order rows */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Order rows — scrolls independently */}
+      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 40, display: "flex", flexDirection: "column", gap: 8 }}>
         {loading && orders.length === 0 && (
           <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif" }}>
             <div style={{ fontSize: 24, marginBottom: 12, display: "inline-block", animation: "spin 1s linear infinite", color: "var(--text-faint)" }}>↻</div>
