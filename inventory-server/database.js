@@ -60,6 +60,29 @@ db.exec(`
   );
 `);
 
+// v2: material tracking — label pool + category blank sizes + label_id on inventory
+db.exec(`
+  CREATE TABLE IF NOT EXISTS label_pool (
+    id          TEXT    PRIMARY KEY,
+    status      TEXT    NOT NULL DEFAULT 'unassigned',
+    created_at  INTEGER NOT NULL,
+    assigned_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS category_blank_sizes (
+    category   TEXT    PRIMARY KEY,
+    min_width  REAL    NOT NULL,
+    min_height REAL    NOT NULL
+  );
+`);
+
+// Add label_id column if this is an existing DB that predates v2
+try {
+  db.exec('ALTER TABLE inventory ADD COLUMN label_id TEXT REFERENCES label_pool(id)');
+} catch (e) {
+  if (!e.message.includes('duplicate column')) throw e;
+}
+
 // ── Idempotent migrations for existing databases ──────────────────────────────
 // ALTER TABLE … ADD COLUMN throws if the column already exists; ignore that.
 try {
