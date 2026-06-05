@@ -896,7 +896,7 @@ export default function CatalogTab({ activeListingSync }) {
   const searchBg = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E\")";
 
   return (
-    <div style={{ height: "calc(100vh - 48px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div style={{ height: "calc(100vh - 48px)", display: "flex", flexDirection: "column", overflowX: "visible", overflowY: "hidden" }}>
       {/* Header */}
       <div style={{ padding: "28px 40px 14px", maxWidth: 1100, flexShrink: 0 }}>
         <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>

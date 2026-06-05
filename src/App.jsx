@@ -267,7 +267,7 @@ export default function App() {
   const isDark = theme === "dark";
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg-canvas)", color: "var(--text)" }}>
+    <div style={{ minHeight: "100vh", minWidth: 800, background: "var(--bg-canvas)", color: "var(--text)" }}>
       {/* Tab bar */}
       <div style={{
         display: "flex",

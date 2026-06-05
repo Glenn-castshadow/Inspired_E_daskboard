@@ -777,7 +777,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
   return (
     <div style={{
       height: "calc(100vh - 48px)",
-      display: "flex", flexDirection: "column", overflow: "hidden",
+      display: "flex", flexDirection: "column", overflowX: "visible", overflowY: "hidden",
       background: "var(--bg-canvas)",
       padding: "32px 40px 0",
       fontFamily: "'DM Sans', sans-serif",
