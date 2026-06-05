@@ -1,0 +1,95 @@
+<h2>Three approaches to material tracking</h2>
+<p class="subtitle">All three use the same iPhone QR → mobile web flow. The difference is scope and what gets added to the existing codebase.</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Core only <span style="font-size:12px; color:#5a9e6a; font-weight:normal;">⭐ Recommended</span></h3>
+      <p style="color:#aaa; font-size:13px;">Extend the existing inventory system with label support. No new tab, no audit history. Just the essential scan-in / scan-out loop and the Fulfillment badge.</p>
+
+      <div style="margin-top:12px; background:#0f1829; border-radius:8px; padding:14px; font-size:12px;">
+        <div style="color:#7ec8e3; margin-bottom:8px; font-weight:600; letter-spacing:.05em;">WHAT GETS ADDED</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#5a9e6a;">DB</span>
+            <span style="color:#ccc;"><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">label_pool</code> table — pre-generated label IDs (unassigned / assigned)<br/><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">label_id</code> column on <code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">inventory_items</code><br/><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">category_blank_sizes</code> — category → default W×H</span>
+          </div>
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#e8a84a;">Rust</span>
+            <span style="color:#ccc;">3 new routes on inventory HTTP server:<br/><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">GET /m/:id</code> — scan landing page<br/><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">POST /m/:id/in</code> — check in (assign + dimensions)<br/><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">POST /m/:id/out</code> — check out (mark used)</span>
+          </div>
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#e8734a;">UI</span>
+            <span style="color:#ccc;">Label pool section in Inventory tab<br/>QR batch print view (opens in browser)<br/>Offcut badge in Fulfillment tab rows</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Smallest blast radius</li><li>Reuses all existing infrastructure</li><li>Shippable in one session</li></ul></div>
+        <div class="cons"><ul><li>No check-in/out history</li><li>Label pool managed from desktop only</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Core + transaction log</h3>
+      <p style="color:#aaa; font-size:13px;">Everything in A, plus a lightweight history of every check-in and check-out event. Useful for knowing when material was last moved and spotting losses.</p>
+
+      <div style="margin-top:12px; background:#0f1829; border-radius:8px; padding:14px; font-size:12px;">
+        <div style="color:#7ec8e3; margin-bottom:8px; font-weight:600; letter-spacing:.05em;">ADDS ON TOP OF A</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#5a9e6a;">DB</span>
+            <span style="color:#ccc;"><code style="background:#1a2a3e;padding:1px 5px;border-radius:3px;">material_events</code> table — label_id, event (in/out/create), timestamp, notes</span>
+          </div>
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#e8734a;">UI</span>
+            <span style="color:#ccc;">"Last moved: 3 days ago" shown on inventory rows<br/>Expandable history per item</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Answers "where did that piece go?"</li><li>Low extra complexity</li></ul></div>
+        <div class="cons"><ul><li>More DB writes on every scan</li><li>Slightly more to build</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Core + log + Materials tab</h3>
+      <p style="color:#aaa; font-size:13px;">Everything in B, plus a dedicated Materials tab in the dashboard — label pool management, offcut browser with fit-check query, full history view.</p>
+
+      <div style="margin-top:12px; background:#0f1829; border-radius:8px; padding:14px; font-size:12px;">
+        <div style="color:#7ec8e3; margin-bottom:8px; font-weight:600; letter-spacing:.05em;">ADDS ON TOP OF B</div>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#e8734a;">UI</span>
+            <span style="color:#ccc;">New "Materials" tab — label pool table (generate / print / revoke),<br/>offcut browser with "find pieces that fit W×H" query,<br/>transaction history table</span>
+          </div>
+          <div style="display:flex; align-items:flex-start; gap:8px;">
+            <span style="color:#e8a84a;">Scope</span>
+            <span style="color:#ccc;">~2× the frontend work of A. New Rust module (material.rs) cleaner than extending inventory.rs further.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Most complete UX</li><li>Clean module separation</li><li>Ad-hoc offcut lookup built in</li></ul></div>
+        <div class="cons"><ul><li>Another tab in an already tabbed app</li><li>Most work to build</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div style="margin-top:20px; padding:14px; background:#0d1f0d; border-radius:8px; border-left:3px solid #5a9e6a; font-size:13px; color:#aaa;">
+  <strong style="color:#5a9e6a;">My recommendation: A.</strong> You're one operator. You don't need audit history to know where material went — you were there. A new tab adds navigation cost for marginal gain. Get the scanning loop working first; B or C can be layered in if you find you miss the history.
+</div>

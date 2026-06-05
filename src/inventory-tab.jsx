@@ -27,6 +27,19 @@ const MOCK_INVENTORY = [
 
 const MOCK_LABEL_COUNTS = { unassigned: 25, active: 8, retired: 3 };
 
+const PRINTER_TARGETS = [
+  { key: "rollo", label: "Rollo" },
+  { key: "laser", label: "Laser printer" },
+];
+
+const LABEL_STOCKS = [
+  { key: "rollo_2x1", printer: "rollo", label: "2 x 1 in", detail: "1 per label" },
+  { key: "rollo_2_25x1_25", printer: "rollo", label: "2.25 x 1.25 in", detail: "1 per label" },
+  { key: "rollo_3x2", printer: "rollo", label: "3 x 2 in", detail: "1 per label" },
+  { key: "avery_5160", printer: "laser", label: "Avery 5160 / 8160", detail: "30 per sheet" },
+  { key: "avery_5163", printer: "laser", label: "Avery 5163 / 8163", detail: "10 per sheet" },
+];
+
 const MOCK_PRODUCTS = [
   { id: 1, sku: "DBC-RBH-SM-CU",  name: "Robie House Chime - Small",   category: "DBC", design: "RBH", finish: "CU",  width: 12, height: 18, thickness: "1/8", material: "copper_mdf",    notes: "", active: true, created_at: 0, updated_at: 0 },
   { id: 2, sku: "CLM-LOT-CU",     name: "Lotus Column",                category: "CLM", design: "LOT", finish: "CU",  width: 9,  height: 12, thickness: "1/8", material: "copper_mdf",    notes: "", active: true, created_at: 0, updated_at: 0 },
@@ -49,6 +62,9 @@ function fmtMoney(n) {
 function LabelPool({ serverUrl }) {
   const [counts, setCounts]     = useState(null);
   const [batchN, setBatchN]     = useState(50);
+  const [printN, setPrintN]     = useState(30);
+  const [printer, setPrinter]   = useState("rollo");
+  const [stock, setStock]       = useState("rollo_2x1");
   const [busy, setBusy]         = useState(false);
   const [open, setOpen]         = useState(false);
 
@@ -58,6 +74,13 @@ function LabelPool({ serverUrl }) {
   }, []);
 
   useEffect(() => { loadCounts(); }, [loadCounts]);
+
+  useEffect(() => {
+    if (!counts) return;
+    setPrintN(n => Math.max(1, Math.min(Number(n) || 1, Math.max(counts.unassigned, 1))));
+  }, [counts]);
+
+  const availableStocks = LABEL_STOCKS.filter(s => s.printer === printer);
 
   const handleGenerate = async () => {
     setBusy(true);
@@ -71,11 +94,31 @@ function LabelPool({ serverUrl }) {
     }
   };
 
-  const handlePrint = async () => {
-    if (!serverUrl) return;
-    const { open: shellOpen } = await import("@tauri-apps/plugin-shell");
-    shellOpen(`${serverUrl.replace(/\/$/, "")}/labels/print`).catch(console.error);
+  const handlePrinterChange = (nextPrinter) => {
+    setPrinter(nextPrinter);
+    const nextStock = LABEL_STOCKS.find(s => s.printer === nextPrinter)?.key;
+    if (nextStock) setStock(nextStock);
   };
+
+  const openPrintPage = async (autoPrint) => {
+    if (!serverUrl) return;
+    const base = serverUrl.replace(/\/$/, "");
+    const params = new URLSearchParams({
+      stock,
+      printer,
+      limit: String(Math.max(1, Math.min(Number(printN) || 1, counts?.unassigned || 1))),
+      autoprint: autoPrint ? "1" : "0",
+    });
+    const url = `${base}/labels/print?${params.toString()}`;
+    if (isTauri) {
+      const { open: shellOpen } = await import("@tauri-apps/plugin-shell");
+      shellOpen(url).catch(console.error);
+    } else {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const handlePrint = () => openPrintPage(true);
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -131,17 +174,97 @@ function LabelPool({ serverUrl }) {
           >
             {busy ? "Generating…" : "Generate batch"}
           </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 600,
+                           color: "var(--text-muted)", textTransform: "uppercase",
+                           letterSpacing: "0.05em" }}>Printer</span>
+            <div style={{
+              display: "inline-flex",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              overflow: "hidden",
+              background: "var(--bg-canvas)",
+            }}>
+              {PRINTER_TARGETS.map(p => (
+                <button
+                  key={p.key}
+                  onClick={() => handlePrinterChange(p.key)}
+                  style={{
+                    border: "none",
+                    borderRight: p.key === "rollo" ? "1px solid var(--border)" : "none",
+                    background: printer === p.key ? "var(--accent)" : "transparent",
+                    color: printer === p.key ? "#fff" : "var(--text-muted)",
+                    padding: "7px 10px",
+                    cursor: "pointer",
+                    fontFamily: "'DM Sans', sans-serif",
+                    fontSize: 12,
+                    fontWeight: printer === p.key ? 700 : 500,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <label style={labelStyle}>
+            Label stock
+            <select
+              value={stock}
+              onChange={e => setStock(e.target.value)}
+              style={{
+                minWidth: 190, padding: "7px 10px", fontFamily: "'DM Sans', sans-serif",
+                fontSize: 13, background: "var(--bg-canvas)",
+                border: "1px solid var(--border)", borderRadius: 6,
+                color: "var(--text)",
+              }}
+            >
+              {availableStocks.map(s => (
+                <option key={s.key} value={s.key}>{s.label} - {s.detail}</option>
+              ))}
+            </select>
+          </label>
+          <label style={labelStyle}>
+            Quantity
+            <input
+              type="number" min={1} max={Math.max(counts?.unassigned || 1, 1)} value={printN}
+              onChange={e => setPrintN(Math.max(1, Math.min(counts?.unassigned || 1, Number(e.target.value) || 1)))}
+              style={{
+                width: 92, padding: "7px 10px", fontFamily: "'DM Sans', sans-serif",
+                fontSize: 13, background: "var(--bg-canvas)",
+                border: "1px solid var(--border)", borderRadius: 6,
+                color: "var(--text)",
+              }}
+            />
+          </label>
+          {serverUrl && (
+            <button
+              onClick={() => openPrintPage(false)}
+              disabled={!counts?.unassigned}
+              style={{
+                ...btnSecondary,
+                opacity: !counts?.unassigned ? 0.5 : 1,
+                cursor: !counts?.unassigned ? "not-allowed" : "pointer",
+              }}
+            >
+              Preview
+            </button>
+          )}
           {serverUrl ? (
             <button
               onClick={handlePrint}
+              disabled={!counts?.unassigned}
+              aria-label="Open print dialog"
               style={{
                 fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
                 padding: "8px 16px", background: "var(--bg-muted)",
                 border: "1px solid var(--border)", borderRadius: 6,
-                color: "var(--text)", cursor: "pointer",
+                color: "var(--text)",
+                cursor: !counts?.unassigned ? "not-allowed" : "pointer",
+                opacity: !counts?.unassigned ? 0.5 : 1,
               }}
             >
-              Print batch ↗
+              Open print dialog
             </button>
           ) : (
             <span style={{ fontSize: 12, color: "var(--text-faint)", fontFamily: "'DM Sans', sans-serif" }}>

@@ -1,0 +1,76 @@
+<h2>How do we capture offcut shape?</h2>
+<p class="subtitle">The dashboard needs to know if a piece can satisfy a job. How much geometry should we store?</p>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Bounding box only</h3>
+      <p>Width × Height. Simple — works perfectly for rectangular cuts. For irregular pieces the operator notes usable area in a notes field.</p>
+      <div style="margin-top:12px; background:#1a1a2e; border-radius:6px; padding:12px; display:inline-flex; align-items:center; gap:16px;">
+        <svg width="80" height="60" viewBox="0 0 80 60">
+          <rect x="4" y="4" width="72" height="52" fill="#2a3a5e" stroke="#4a6fa5" stroke-width="2" rx="3"/>
+          <line x1="4" y1="58" x2="76" y2="58" stroke="#7ec8e3" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="38" y="56" fill="#7ec8e3" font-size="9" text-anchor="middle">12"</text>
+          <line x1="78" y1="4" x2="78" y2="56" stroke="#7ec8e3" stroke-width="1.5"/>
+          <text x="76" y="34" fill="#7ec8e3" font-size="9" text-anchor="end">8"</text>
+        </svg>
+        <span style="color:#aaa; font-size:13px;">W × H<br/>+ notes</span>
+      </div>
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Fastest to enter</li><li>Works for 90% of cuts</li></ul></div>
+        <div class="cons"><ul><li>L-shapes overstated</li><li>Blind recommendation</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Shape type + dimensions</h3>
+      <p>Pick a shape (Rectangle / L-shape / Strip) then fill in the relevant measurements. Covers 99% of real offcuts.</p>
+      <div style="margin-top:12px; display:flex; gap:12px; flex-wrap:wrap;">
+        <div style="background:#1a1a2e; border-radius:6px; padding:10px; text-align:center; border:2px solid #4a6fa5;">
+          <svg width="60" height="48" viewBox="0 0 60 48">
+            <rect x="4" y="4" width="52" height="40" fill="#2a3a5e" stroke="#4a6fa5" stroke-width="2" rx="2"/>
+          </svg>
+          <div style="color:#aaa;font-size:11px;">Rectangle</div>
+        </div>
+        <div style="background:#1a1a2e; border-radius:6px; padding:10px; text-align:center; border:2px solid #e8734a;">
+          <svg width="60" height="48" viewBox="0 0 60 48">
+            <polygon points="4,4 52,4 52,24 28,24 28,44 4,44" fill="#3a2a1e" stroke="#e8734a" stroke-width="2"/>
+          </svg>
+          <div style="color:#aaa;font-size:11px;">L-shape</div>
+        </div>
+        <div style="background:#1a1a2e; border-radius:6px; padding:10px; text-align:center; border:2px solid #5a9e6a;">
+          <svg width="60" height="48" viewBox="0 0 60 48">
+            <rect x="4" y="16" width="52" height="16" fill="#1a3a2e" stroke="#5a9e6a" stroke-width="2" rx="2"/>
+          </svg>
+          <div style="color:#aaa;font-size:11px;">Strip</div>
+        </div>
+      </div>
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Accurate fit math</li><li>Fast — 2–3 taps on iPhone</li></ul></div>
+        <div class="cons"><ul><li>Truly odd shapes still need notes</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Photo + bounding box</h3>
+      <p>Snap a photo of the piece for visual reference, store W × H for the math. You see the piece before pulling it.</p>
+      <div style="margin-top:12px; display:flex; gap:12px; align-items:center;">
+        <div style="background:#1a1a2e; border-radius:6px; width:80px; height:70px; display:flex; align-items:center; justify-content:center; border:1px dashed #4a6fa5; color:#4a6fa5; font-size:28px;">📷</div>
+        <div style="color:#aaa; font-size:13px;">Photo on check-in<br/>W × H stored<br/>Thumbnail in UI</div>
+      </div>
+      <div class="pros-cons" style="margin-top:10px;">
+        <div class="pros"><ul><li>Visual reference — see the piece instantly</li><li>No shape taxonomy needed</li></ul></div>
+        <div class="cons"><ul><li>Doesn't help the fit algorithm</li><li>Storage & sync overhead</li></ul></div>
+      </div>
+    </div>
+  </div>
+
+</div>
