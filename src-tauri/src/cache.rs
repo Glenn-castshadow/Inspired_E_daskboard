@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -275,6 +275,33 @@ impl CacheDb {
             .map_err(|e| e.to_string())?;
         }
 
+        // ── v12: material tracking — label pool + category blank sizes + label_id ─
+        if version < 12 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS label_pool (
+                    id          TEXT    PRIMARY KEY,
+                    status      TEXT    NOT NULL DEFAULT 'unassigned',
+                    created_at  INTEGER NOT NULL,
+                    assigned_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS category_blank_sizes (
+                    category   TEXT    PRIMARY KEY,
+                    min_width  REAL    NOT NULL,
+                    min_height REAL    NOT NULL
+                );
+                PRAGMA user_version = 12;",
+            )
+            .map_err(|e| e.to_string())?;
+            match conn.execute(
+                "ALTER TABLE inventory ADD COLUMN label_id TEXT REFERENCES label_pool(id)",
+                [],
+            ) {
+                Ok(_) => {}
+                Err(e) if e.to_string().contains("duplicate column") => {}
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+
         let final_version: i32 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(|e| e.to_string())?;
@@ -386,7 +413,7 @@ impl CacheDb {
     pub fn get_inventory(&self) -> Result<Vec<crate::inventory::InventoryItem>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, item_type, material, width, height, thickness, quantity, sku, notes, unit_cost, created_at, updated_at
+            "SELECT id, item_type, material, width, height, thickness, quantity, sku, notes, unit_cost, created_at, updated_at, label_id
              FROM inventory ORDER BY item_type, material, width DESC, height DESC"
         ).map_err(|e| e.to_string())?;
         let rows = stmt.query_map([], |row| {
@@ -403,6 +430,7 @@ impl CacheDb {
                 unit_cost:  row.get(9)?,
                 created_at: row.get(10)?,
                 updated_at: row.get(11)?,
+                label_id:   row.get(12)?,
             })
         }).map_err(|e| e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
@@ -431,6 +459,7 @@ impl CacheDb {
             unit_cost:  item.unit_cost,
             created_at: now,
             updated_at: now,
+            label_id:   None,
         })
     }
 

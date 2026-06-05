@@ -37,6 +37,10 @@ pub struct InventoryItem {
     pub unit_cost:  f64,
     pub created_at: i64,   // unix
     pub updated_at: i64,   // unix
+    /// Pool label UUID assigned to this physical piece. None for items
+    /// entered manually (pre-tracking) or not yet labelled.
+    #[serde(default)]
+    pub label_id:   Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
