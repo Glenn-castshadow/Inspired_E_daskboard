@@ -3,7 +3,7 @@
 Internal Tauri desktop app for managing orders across multiple Etsy shops. Replaces manual order tracking with a unified fulfillment queue, analytics dashboard, and customer geography map.
 
 **Platform:** Windows 11 only · Single operator · Not a public app
-**Current version:** v0.1.88
+**Current version:** v0.1.89
 
 ---
 
@@ -314,6 +314,7 @@ WebView2 user data at `%LOCALAPPDATA%\com.castshadow.etsy-dashboard\EBWebView`.
 
 | Version | Date |
 |---|---|
+| v0.1.89 | 2026-06-05 |
 | v0.1.88 | 2026-06-05 |
 | v0.1.87 | 2026-06-05 |
 | v0.1.86 | 2026-06-05 |
