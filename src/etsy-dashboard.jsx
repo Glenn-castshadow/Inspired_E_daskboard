@@ -434,7 +434,8 @@ export default function EtsyDashboard({ theme = "light", orders = [], loading = 
 
   return (
     <div style={{
-      minHeight: "calc(100vh - 45px)",
+      height: "calc(100vh - 48px)",
+      overflowY: "auto",
       background: "var(--bg-canvas)", color: "var(--text)",
       padding: "32px 40px",
       fontFamily: "'DM Sans', sans-serif",
