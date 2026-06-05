@@ -956,6 +956,85 @@ impl CacheDb {
         Ok(filename)
     }
 
+    // ── Label pool ────────────────────────────────────────────────────────────
+
+    /// Generate `n` new unassigned label UUIDs in the local pool.
+    /// Returns the list of new IDs. When the inventory server is configured,
+    /// use the server-side route instead (see inventory.rs generate_label_batch).
+    pub fn generate_label_batch(&self, n: usize) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_unix();
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute(
+                "INSERT INTO label_pool (id, status, created_at) VALUES (?1, 'unassigned', ?2)",
+                params![id, now],
+            )
+            .map_err(|e| e.to_string())?;
+            ids.push(id);
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(ids)
+    }
+
+    pub fn get_label_pool_counts(&self) -> Result<LabelPoolCounts, String> {
+        let conn = self.conn.lock().unwrap();
+        let count = |status: &str| -> Result<i64, String> {
+            conn.query_row(
+                "SELECT COUNT(*) FROM label_pool WHERE status = ?1",
+                params![status],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+        };
+        Ok(LabelPoolCounts {
+            unassigned: count("unassigned")?,
+            active:     count("active")?,
+            retired:    count("retired")?,
+        })
+    }
+
+    // ── Category blank sizes ───────────────────────────────────────────────────
+
+    pub fn get_category_blank_sizes(&self) -> Result<Vec<CategoryBlankSize>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT category, min_width, min_height FROM category_blank_sizes ORDER BY category",
+        )
+        .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(CategoryBlankSize {
+                    category:   row.get(0)?,
+                    min_width:  row.get(1)?,
+                    min_height: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
+    pub fn upsert_category_blank_size(
+        &self,
+        category: &str,
+        min_width: f64,
+        min_height: f64,
+    ) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO category_blank_sizes (category, min_width, min_height)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(category) DO UPDATE SET
+               min_width  = excluded.min_width,
+               min_height = excluded.min_height",
+            params![category.to_uppercase(), min_width, min_height],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     // ── Maintenance ───────────────────────────────────────────────────────────
 
     pub fn clear_orders(&self) -> Result<(), String> {
@@ -1047,6 +1126,22 @@ pub struct AdSpend {
     pub shop_id: u64,
     pub month:   String,
     pub amount:  f64,
+}
+
+/// Counts of label pool entries by status. Returned by get_label_pool_counts.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct LabelPoolCounts {
+    pub unassigned: i64,
+    pub active:     i64,
+    pub retired:    i64,
+}
+
+/// A category's minimum blank size for the offcut recommendation engine.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CategoryBlankSize {
+    pub category:   String,
+    pub min_width:  f64,
+    pub min_height: f64,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
