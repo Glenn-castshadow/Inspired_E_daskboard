@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "etsy-dashboard"
-version = "0.1.73"
+version = "0.1.97"
 dependencies = [
  "aes-gcm",
  "base64 0.21.7",
@@ -1079,6 +1079,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-shell",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
