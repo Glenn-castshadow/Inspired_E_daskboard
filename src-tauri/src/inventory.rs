@@ -247,3 +247,65 @@ pub async fn delete_inventory_item(
         cache.delete_inventory_item(id)
     }
 }
+
+// ── Label pool commands ───────────────────────────────────────────────────
+
+/// Generate a batch of unassigned pool labels.
+/// Routes through the inventory server when configured; falls back to local cache.db.
+/// `n` is clamped to 1–200.
+#[tauri::command]
+pub async fn generate_label_batch(
+    n: i64,
+    cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
+) -> Result<Vec<String>, String> {
+    let count = (n.max(1).min(200)) as usize;
+    if let Some(base) = settings.server_url() {
+        #[derive(serde::Deserialize)] struct Resp { ids: Vec<String> }
+        let resp: Resp = http_post(
+            &http,
+            &format!("{}/labels/generate", base),
+            &settings.api_key(),
+            &serde_json::json!({ "n": count }),
+        )
+        .await?;
+        Ok(resp.ids)
+    } else {
+        cache.generate_label_batch(count)
+    }
+}
+
+/// Return unassigned / active / retired counts for the label pool.
+#[tauri::command]
+pub async fn get_label_pool_counts(
+    cache: State<'_, CacheDb>,
+    settings: State<'_, AppSettings>,
+    http: State<'_, reqwest::Client>,
+) -> Result<crate::cache::LabelPoolCounts, String> {
+    if let Some(base) = settings.server_url() {
+        http_get(&http, &format!("{}/labels/counts", base), &settings.api_key()).await
+    } else {
+        cache.get_label_pool_counts()
+    }
+}
+
+/// Return all category → min blank size entries.
+/// Always reads from local cache.db (category sizes are per-machine config).
+#[tauri::command]
+pub async fn get_category_blank_sizes(
+    cache: State<'_, CacheDb>,
+) -> Result<Vec<crate::cache::CategoryBlankSize>, String> {
+    cache.get_category_blank_sizes()
+}
+
+/// Seed or update one category's minimum blank dimensions (inches).
+#[tauri::command]
+pub async fn upsert_category_blank_size(
+    category: String,
+    min_width: f64,
+    min_height: f64,
+    cache: State<'_, CacheDb>,
+) -> Result<(), String> {
+    cache.upsert_category_blank_size(&category, min_width, min_height)
+}

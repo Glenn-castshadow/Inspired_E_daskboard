@@ -87,6 +87,10 @@ fn main() {
             inventory::adjust_inventory_qty,
             inventory::update_inventory_item,
             inventory::delete_inventory_item,
+            inventory::generate_label_batch,
+            inventory::get_label_pool_counts,
+            inventory::get_category_blank_sizes,
+            inventory::upsert_category_blank_size,
             // Product catalog
             catalog::get_products,
             catalog::add_product,
