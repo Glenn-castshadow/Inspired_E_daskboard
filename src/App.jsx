@@ -267,7 +267,7 @@ export default function App() {
   const isDark = theme === "dark";
 
   return (
-    <div style={{ height: "100vh", overflow: "hidden", background: "var(--bg-canvas)", color: "var(--text)" }}>
+    <div style={{ height: "100vh", overflowY: "hidden", background: "var(--bg-canvas)", color: "var(--text)" }}>
       {/* Tab bar */}
       <div style={{
         display: "flex",
