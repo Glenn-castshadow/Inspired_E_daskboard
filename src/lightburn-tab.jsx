@@ -804,7 +804,7 @@ export default function LightburnTab({ orders = [] }) {
   return (
     <div style={{
       height: "calc(100vh - 48px)",
-      display: "flex", flexDirection: "column", overflowX: "visible", overflowY: "hidden",
+      display: "flex", flexDirection: "column", overflow: "hidden",
       padding: "32px 40px 0", maxWidth: 1180,
     }}>
 

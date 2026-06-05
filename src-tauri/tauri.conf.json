@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "etsy-dashboard",
-  "version": "0.1.93",
+  "version": "0.1.94",
   "identifier": "com.castshadow.etsy-dashboard",
   "build": {
     "frontendDist": "../dist",
@@ -16,6 +16,8 @@
         "title": "Genevieve Etsy Dashboard",
         "width": 1280,
         "height": 800,
+        "minWidth": 900,
+        "minHeight": 620,
         "resizable": true,
         "fullscreen": false,
         "dragDropEnabled": true
