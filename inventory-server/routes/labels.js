@@ -4,12 +4,13 @@
 // /labels/generate and /labels/counts require the API key (called from Tauri app).
 // /labels/print and /labels/qr/:id are public (opened in browser, no key available).
 
-const express  = require('express');
-const router   = express.Router();
-const db       = require('../database');
-const QRCode   = require('qrcode');
-const crypto   = require('crypto');
+const express      = require('express');
+const router       = express.Router();
+const db           = require('../database');
+const QRCode       = require('qrcode');
+const crypto       = require('crypto');
 const requireApiKey = require('../middleware/auth');
+const { scanBaseUrl } = require('../config');
 
 const now = () => Math.floor(Date.now() / 1000);
 
@@ -41,10 +42,9 @@ router.get('/counts', requireApiKey, (req, res) => {
 
 // GET /labels/qr/:id — PNG QR code (no auth — loaded by <img> tags in print page)
 router.get('/qr/:id', async (req, res) => {
-  // Encode the full scan URL into the QR so the iPhone just scans → Safari opens it
-  const host  = req.headers['x-forwarded-host'] ?? req.headers.host;
-  const proto = req.headers['x-forwarded-proto'] ?? 'http';
-  const url   = `${proto}://${host}/m/${req.params.id}`;
+  // Use the configured scanBaseUrl so QR codes always encode the correct LAN address
+  // regardless of how this page is opened (localhost, LAN IP, etc.)
+  const url = `${scanBaseUrl}/m/${req.params.id}`;
   try {
     const png = await QRCode.toBuffer(url, {
       type: 'png', width: 150, margin: 1,

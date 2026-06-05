@@ -92,15 +92,14 @@ function page(title, body) {
 // GET /m/:id
 router.get('/:id', (req, res) => {
   const { id } = req.params;
-  const label = db.prepare('SELECT * FROM label_pool WHERE id = ?').get(id);
+  let label = db.prepare('SELECT * FROM label_pool WHERE id = ?').get(id);
 
   if (!label) {
-    return res.send(page('Label Not Recognized', `
-      <h1>Label not recognized</h1>
-      <span class="id">${id}</span>
-      <p>This QR code isn't in the label pool.<br>
-         Generate a fresh batch from the desktop app and try again.</p>
-    `));
+    // Auto-register: any QR code we ever physically printed should always work,
+    // even if the DB was wiped and rebuilt. Treat unknown IDs as fresh labels.
+    db.prepare("INSERT OR IGNORE INTO label_pool (id, status, created_at) VALUES (?, 'unassigned', ?)")
+      .run(id, now());
+    label = { id, status: 'unassigned' };
   }
 
   if (label.status === 'retired') {
@@ -181,12 +180,18 @@ router.get('/:id', (req, res) => {
 // POST /m/:id/in
 router.post('/:id/in', (req, res) => {
   const { id } = req.params;
-  const label = db.prepare("SELECT * FROM label_pool WHERE id = ?").get(id);
-  if (!label || label.status !== 'unassigned') {
-    return res.status(400).send(page('Error', `
-      <h1>Cannot check in</h1>
-      <p>Label <code>${id}</code> is not available (status: ${label?.status ?? 'unknown'}).</p>
-    `));
+  let label = db.prepare("SELECT * FROM label_pool WHERE id = ?").get(id);
+
+  // Auto-insert if missing (DB was wiped — the physical label is still valid)
+  if (!label) {
+    db.prepare("INSERT OR IGNORE INTO label_pool (id, status, created_at) VALUES (?, 'unassigned', ?)")
+      .run(id, now());
+    label = { id, status: 'unassigned' };
+  }
+
+  // Already active or retired — bounce back to the item view instead of showing an error
+  if (label.status !== 'unassigned') {
+    return res.redirect(`/m/${id}`);
   }
   const { item_type, material, width, height, thickness, notes } = req.body;
   if (!material || !width || !height) {
@@ -244,14 +249,16 @@ router.post('/:id/in', (req, res) => {
 router.post('/:id/out', (req, res) => {
   const { id } = req.params;
   const label = db.prepare("SELECT * FROM label_pool WHERE id = ?").get(id);
-  if (!label || label.status !== 'active') {
-    return res.status(400).send(page('Error', `
-      <h1>Cannot check out</h1>
-      <p>Label <code>${id}</code> is not active.</p>
-    `));
-  }
+
+  // If label pool row is missing (wiped DB), do the checkout anyway — the inventory
+  // item is what matters. Insert a retired row so the GET page shows the right state.
   db.prepare("UPDATE inventory SET quantity = 0, updated_at = ? WHERE label_id = ?").run(now(), id);
-  db.prepare("UPDATE label_pool SET status = 'retired' WHERE id = ?").run(id);
+  if (label) {
+    db.prepare("UPDATE label_pool SET status = 'retired' WHERE id = ?").run(id);
+  } else {
+    db.prepare("INSERT OR IGNORE INTO label_pool (id, status, created_at) VALUES (?, 'retired', ?)")
+      .run(id, now());
+  }
   res.send(page('Checked Out', `
     <h1>Checked out ✓</h1>
     <span class="badge out">Retired</span>

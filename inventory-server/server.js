@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { port } = require('./config');
+const { port, scanBaseUrl } = require('./config');
 
 // Initialise DB (runs CREATE TABLE IF NOT EXISTS on startup)
 require('./database');
@@ -40,5 +40,11 @@ app.use((err, _req, res, _next) => {
 
 app.listen(port, () => {
   console.log(`[inventory-server] Listening on port ${port}`);
-  console.log(`[inventory-server] Health: http://localhost:${port}/health`);
+  console.log(`[inventory-server] Health:    http://localhost:${port}/health`);
+  console.log(`[inventory-server] Scan URL:  ${scanBaseUrl}/m/<UUID>`);
+  console.log(`[inventory-server] Print:     ${scanBaseUrl.replace(/localhost/, `localhost`)}/labels/print`);
+  if (scanBaseUrl.includes('localhost')) {
+    console.warn('[inventory-server] ⚠ Scan URL is localhost — iPhones cannot reach this.');
+    console.warn('[inventory-server]   Set SCAN_BASE_URL=http://<LAN-IP>:' + port + ' in your .env file.');
+  }
 });

@@ -15,3 +15,7 @@ services:
       NODE_ENV: production
       PORT: 3456
       DB_PATH: /data/inventory.db
+      # REQUIRED: Set this to the NAS/host machine's LAN IP so QR codes
+      # encode a URL iPhones can reach. Example: http://192.168.1.100:3456
+      # Without this, QR codes will use the container's internal IP (unreachable).
+      SCAN_BASE_URL: ${SCAN_BASE_URL}
