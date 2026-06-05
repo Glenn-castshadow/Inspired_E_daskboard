@@ -21,9 +21,11 @@ const MOCK_INVENTORY = [
   { id: 5, item_type: "blank",    material: "copper_mdf",    width: 6,  height: 9,  thickness: "1/8", quantity: 2, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
   { id: 6, item_type: "finished", material: "copper_mdf",    width: 12, height: 18, thickness: "1/8", quantity: 2, sku: "DBC-RBH-SM-CU", notes: "Display + extra",  created_at: 0, updated_at: 0 },
   { id: 7, item_type: "finished", material: "gold_foil_mdf", width: 9,  height: 12, thickness: "1/8", quantity: 1, sku: "CLM-LOT-CU",    notes: "Photo prop",       created_at: 0, updated_at: 0 },
-  { id: 8, item_type: "offcut",   material: "copper_mdf",    width: 8,  height: 6,  thickness: "1/8", quantity: 1, sku: "",              notes: "From 12×18 cut",   created_at: 0, updated_at: 0 },
-  { id: 9, item_type: "offcut",   material: "raw_mdf",       width: 10, height: 8,  thickness: "1/8", quantity: 1, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
+  { id: 8, item_type: "offcut",   material: "copper_mdf",    width: 8,  height: 6,  thickness: "1/8", quantity: 1, sku: "", notes: "From 12×18 cut", label_id: "mock-label-001", created_at: 0, updated_at: 0 },
+  { id: 9, item_type: "offcut",   material: "raw_mdf",       width: 10, height: 8,  thickness: "1/8", quantity: 1, sku: "", notes: "",               label_id: "mock-label-002", created_at: 0, updated_at: 0 },
 ];
+
+const MOCK_LABEL_COUNTS = { unassigned: 25, active: 8, retired: 3 };
 
 const MOCK_PRODUCTS = [
   { id: 1, sku: "DBC-RBH-SM-CU",  name: "Robie House Chime - Small",   category: "DBC", design: "RBH", finish: "CU",  width: 12, height: 18, thickness: "1/8", material: "copper_mdf",    notes: "", active: true, created_at: 0, updated_at: 0 },
@@ -40,6 +42,116 @@ function fmtDims(w, h) {
 
 function fmtMoney(n) {
   return `$${(n ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// ── Label Pool section ────────────────────────────────────────────────────────
+
+function LabelPool({ serverUrl }) {
+  const [counts, setCounts]     = useState(null);
+  const [batchN, setBatchN]     = useState(50);
+  const [busy, setBusy]         = useState(false);
+  const [open, setOpen]         = useState(false);
+
+  const loadCounts = useCallback(async () => {
+    const data = await invokeOrMock("get_label_pool_counts", {}, () => MOCK_LABEL_COUNTS);
+    setCounts(data);
+  }, []);
+
+  useEffect(() => { loadCounts(); }, [loadCounts]);
+
+  const handleGenerate = async () => {
+    setBusy(true);
+    try {
+      await invokeOrMock("generate_label_batch", { n: batchN }, () => Array.from({ length: batchN }, (_, i) => `mock-${i}`));
+      await loadCounts();
+    } catch (e) {
+      console.error("generate_label_batch failed:", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePrint = async () => {
+    if (!serverUrl) return;
+    const { open: shellOpen } = await import("@tauri-apps/plugin-shell");
+    shellOpen(`${serverUrl.replace(/\/$/, "")}/labels/print`).catch(console.error);
+  };
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: "none", border: "none", cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 8,
+          fontFamily: "'DM Sans', sans-serif", fontSize: 12, fontWeight: 600,
+          color: "var(--text-muted)", textTransform: "uppercase",
+          letterSpacing: "0.05em", padding: "0 0 10px",
+        }}
+      >
+        <span style={{ fontSize: 14 }}>{open ? "▾" : "▸"}</span>
+        Label Pool
+        {counts && (
+          <span style={{
+            marginLeft: 6, fontFamily: "monospace", fontWeight: 400,
+            fontSize: 11, color: "var(--text-faint)",
+          }}>
+            {counts.unassigned} ready · {counts.active} active · {counts.retired} retired
+          </span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          background: "var(--bg-surface)", border: "1px solid var(--border)",
+          borderRadius: 10, padding: 16, display: "flex",
+          flexWrap: "wrap", gap: 12, alignItems: "flex-end",
+        }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 11, fontWeight: 600,
+                           color: "var(--text-muted)", textTransform: "uppercase",
+                           letterSpacing: "0.05em" }}>Batch size</span>
+            <input
+              type="number" min={1} max={200} value={batchN}
+              onChange={e => setBatchN(Math.max(1, Math.min(200, Number(e.target.value))))}
+              style={{
+                width: 80, padding: "7px 10px", fontFamily: "'DM Sans', sans-serif",
+                fontSize: 13, background: "var(--bg-canvas)",
+                border: "1px solid var(--border)", borderRadius: 6,
+                color: "var(--text)",
+              }}
+            />
+          </div>
+          <button
+            onClick={handleGenerate} disabled={busy}
+            style={{
+              ...btnPrimary, padding: "8px 16px", fontSize: 13,
+              opacity: busy ? 0.6 : 1, cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            {busy ? "Generating…" : "Generate batch"}
+          </button>
+          {serverUrl ? (
+            <button
+              onClick={handlePrint}
+              style={{
+                fontFamily: "'DM Sans', sans-serif", fontSize: 13, fontWeight: 600,
+                padding: "8px 16px", background: "var(--bg-muted)",
+                border: "1px solid var(--border)", borderRadius: 6,
+                color: "var(--text)", cursor: "pointer",
+              }}
+            >
+              Print batch ↗
+            </button>
+          ) : (
+            <span style={{ fontSize: 12, color: "var(--text-faint)", fontFamily: "'DM Sans', sans-serif" }}>
+              (Print requires inventory server)
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 async function invokeOrMock(cmd, args, mockFn) {
@@ -993,6 +1105,13 @@ export default function InventoryTab() {
   const [reconcileMode, setReconcile]   = useState(false);
   const [editingItem, setEditingItem]   = useState(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [serverUrl, setServerUrl]       = useState(null);
+
+  useEffect(() => {
+    invokeOrMock("get_settings", {}, () => ({}))
+      .then(s => setServerUrl(s.inventory_server_url || null))
+      .catch(() => {});
+  }, []);
 
   // ── Load ───────────────────────────────────────────────────────────────────
 
@@ -1107,6 +1226,7 @@ export default function InventoryTab() {
       padding: "32px 40px",
       fontFamily: "'DM Sans', sans-serif",
     }}>
+      <LabelPool serverUrl={serverUrl} />
       {/* Header */}
       <div style={{
         display: "flex", alignItems: "flex-start",
