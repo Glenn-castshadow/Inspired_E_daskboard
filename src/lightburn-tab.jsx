@@ -534,10 +534,10 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
   const visible  = filtered.length;
 
   return (
-    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-      {/* Search bar */}
+    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: "55vh" }}>
+      {/* Search bar — fixed within panel */}
       <div style={{
-        padding: "10px 16px", background: "var(--bg-muted)", borderBottom: "1px solid var(--border)",
+        flexShrink: 0, padding: "10px 16px", background: "var(--bg-muted)", borderBottom: "1px solid var(--border)",
       }}>
         <input
           type="search"
@@ -553,8 +553,9 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
         />
       </div>
 
-      {/* Column header */}
+      {/* Column header — fixed within panel */}
       <div style={{
+        flexShrink: 0,
         display: "grid", gridTemplateColumns: "44px 1fr 240px 20px",
         gap: 14, padding: "7px 16px", background: "var(--bg-muted)",
         fontFamily: "'DM Sans', sans-serif", fontSize: 10,
@@ -567,6 +568,8 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
         <span style={{ textAlign: "center" }}>✓</span>
       </div>
 
+      {/* Rows — scroll within the panel */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       {visible === 0 ? (
         <div style={{ padding: "14px 16px", fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)" }}>
           No listings match "{search}".
@@ -616,8 +619,11 @@ function MatchProductsPanel({ orders, files, mappings, onMappingChange }) {
           );
         })
       )}
+      </div> {/* end rows scroll area */}
 
+      {/* Footer — fixed within panel */}
       <div style={{
+        flexShrink: 0,
         padding: "7px 16px", background: "var(--bg-muted)",
         fontFamily: "'DM Sans', sans-serif", fontSize: 11, color: "var(--text-faint)",
         borderTop: "1px solid var(--border)",
