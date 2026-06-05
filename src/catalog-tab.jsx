@@ -518,8 +518,9 @@ function ShopSection({ title, color, products, catalogFiles, mappingByProduct, f
       </div>
 
       <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-        {/* Column header */}
+        {/* Column header — sticky within the list scroll area */}
         <div style={{
+          position: "sticky", top: 0, zIndex: 2,
           display: "grid", gridTemplateColumns: "44px 1fr 190px 80px 80px",
           padding: "7px 16px", gap: 14, background: "var(--bg-muted)",
           fontFamily: "'DM Sans', sans-serif", fontSize: 10,
@@ -895,9 +896,9 @@ export default function CatalogTab({ activeListingSync }) {
   const searchBg = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E\")";
 
   return (
-    <div style={{ paddingBottom: 48 }}>
+    <div style={{ height: "calc(100vh - 48px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {/* Header */}
-      <div style={{ padding: "28px 40px 14px", maxWidth: 1100 }}>
+      <div style={{ padding: "28px 40px 14px", maxWidth: 1100, flexShrink: 0 }}>
         <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>
           Listings
         </h2>
@@ -909,9 +910,9 @@ export default function CatalogTab({ activeListingSync }) {
 
       <ListingSyncBanner status={activeListingSync} />
 
-      {/* Sticky control bar */}
+      {/* Control bar — fixed above the scroll area, no longer needs sticky */}
       <div style={{
-        position: "sticky", top: 48, zIndex: 9,
+        flexShrink: 0,
         background: "var(--bg-canvas)", borderBottom: "1px solid var(--border)",
         padding: "12px 40px 13px",
       }}>
@@ -970,8 +971,8 @@ export default function CatalogTab({ activeListingSync }) {
         </div>
       </div>
 
-      {/* List */}
-      <div style={{ padding: "22px 40px 0", maxWidth: 1100 }}>
+      {/* List — scrolls independently */}
+      <div style={{ flex: 1, overflowY: "auto", padding: "22px 40px 48px", maxWidth: 1100 }}>
         {loading ? (
           <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)" }}>Loading…</div>
         ) : catalog.length === 0 ? (
