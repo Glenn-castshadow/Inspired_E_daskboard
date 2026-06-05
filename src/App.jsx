@@ -267,7 +267,14 @@ export default function App() {
   const isDark = theme === "dark";
 
   return (
-    <div style={{ height: "100vh", overflowY: "hidden", background: "var(--bg-canvas)", color: "var(--text)" }}>
+    <div style={{
+      height: "100vh",
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      background: "var(--bg-canvas)",
+      color: "var(--text)",
+    }}>
       {/* Tab bar */}
       <div style={{
         display: "flex",
@@ -276,6 +283,7 @@ export default function App() {
         padding: "14px 40px 0",
         borderBottom: "1px solid var(--border)",
         background: "var(--bg-canvas)",
+        flexShrink: 0,
         position: "sticky",
         top: 0,
         zIndex: 10,
@@ -374,7 +382,7 @@ export default function App() {
       </div>
 
       {/* Active view */}
-      {activeTab === "fulfillment" && <FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} categoryBlankSizes={categoryBlankSizes} />}
+      {activeTab === "fulfillment" && <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}><FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} categoryBlankSizes={categoryBlankSizes} /></div>}
       {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
       {activeTab === "inventory"   && <InventoryTab />}
       {activeTab === "catalog"     && <CatalogTab activeListingSync={listingSync} />}

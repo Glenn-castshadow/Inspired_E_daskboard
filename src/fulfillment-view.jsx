@@ -327,6 +327,7 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
       borderLeft: `4px solid ${shop.color}`,
       borderRadius: 10,
       overflow: "hidden",
+      flexShrink: 0,
       opacity: isShipped ? 0.72 : 1,
       transition: "box-shadow 0.15s",
     }}>
@@ -335,7 +336,7 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
         onClick={onToggle}
         style={{
           display: "grid",
-          gridTemplateColumns: "24px 52px 1fr 160px 130px 90px 36px",
+          gridTemplateColumns: "24px 52px minmax(0, 1fr) 160px 130px 90px 36px",
           alignItems: "center",
           gap: 16,
           padding: "14px 20px",
@@ -374,14 +375,20 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
         </div>
 
         {/* Product + buyer */}
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ minWidth: 0, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <span style={{
               fontFamily: "'Playfair Display', serif",
               fontSize: 14,
               fontWeight: 600,
               color: isShipped ? "var(--text-faint)" : "var(--text)",
-            }}>
+              display: "block",
+              flex: "1 1 auto",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }} title={decodeHtml(order.product_name)}>
               {decodeHtml(order.product_name)}
             </span>
             {hasInstructions && !isShipped && (
@@ -398,7 +405,7 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
               }}>NOTE</span>
             )}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, minWidth: 0, overflow: "hidden" }}>
             <span style={{
               fontSize: 10, fontFamily: "'DM Sans', sans-serif", fontWeight: 600,
               color: "#fff", background: shop.color,
@@ -409,14 +416,30 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
             </span>
             <FamilyBadge family={family} dim={isShipped} />
             <OffcutBadge matches={offcutMatches} />
-            <span style={{ fontSize: 12, color: "#aaa", fontFamily: "'DM Sans', sans-serif" }}>
+            <span style={{
+              fontSize: 12,
+              color: "#aaa",
+              fontFamily: "'DM Sans', sans-serif",
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
               {order.id} · {decodeHtml(order.buyer)}
             </span>
           </div>
         </div>
 
         {/* Finish */}
-        <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: isShipped ? "var(--text-faint)" : "var(--text)" }}>
+        <div style={{
+          fontFamily: "'DM Sans', sans-serif",
+          fontSize: 13,
+          color: isShipped ? "var(--text-faint)" : "var(--text)",
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }} title={decodeHtml(order.finish)}>
           {decodeHtml(order.finish)}
         </div>
 
@@ -776,7 +799,8 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
 
   return (
     <div style={{
-      height: "calc(100vh - 48px)",
+      height: "100%",
+      minHeight: 0,
       display: "flex", flexDirection: "column", overflow: "hidden",
       background: "var(--bg-canvas)",
       padding: "32px 40px 0",
@@ -784,7 +808,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       color: "var(--text)",
     }}>
       {/* Header */}
-      <div style={{ marginBottom: 28 }}>
+      <div style={{ marginBottom: 28, flexShrink: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
           <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em" }}>
             Genevieve Etsy Dashboard
@@ -831,6 +855,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
             justifyContent: "space-between",
             cursor: todayUrgentTotal > 0 ? "pointer" : "default",
             transition: "border-color 0.15s",
+            flexShrink: 0,
           }}
         >
           <div>
@@ -870,7 +895,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       )}
 
       {/* Filter pills */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 24 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 24, flexShrink: 0 }}>
         {filters.map(f => (
           <button key={f.key} onClick={() => setFilter(f.key)} style={{
             padding: "6px 14px",
@@ -918,11 +943,12 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       {/* Column headers */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "24px 52px 1fr 160px 130px 90px 36px",
+        gridTemplateColumns: "24px 52px minmax(0, 1fr) 160px 130px 90px 36px",
         gap: 16,
         padding: "0 20px",
         marginBottom: 8,
         alignItems: "center",
+        flexShrink: 0,
       }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
           <input
@@ -948,7 +974,17 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       </div>
 
       {/* Order rows — scrolls independently */}
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", paddingBottom: 40, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{
+        flex: 1,
+        minHeight: 0,
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+        scrollbarGutter: "stable",
+        paddingBottom: 40,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}>
         {loading && orders.length === 0 && (
           <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif" }}>
             <div style={{ fontSize: 24, marginBottom: 12, display: "inline-block", animation: "spin 1s linear infinite", color: "var(--text-faint)" }}>↻</div>
