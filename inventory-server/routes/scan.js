@@ -123,7 +123,14 @@ router.get('/:id', (req, res) => {
 
   if (label.status === 'active') {
     const item = db.prepare('SELECT * FROM inventory WHERE label_id = ?').get(id);
-    if (!item) return res.redirect(`/m/${id}`); // data inconsistency — fall through to unassigned
+    if (!item) {
+      return res.send(page('Data Error', `
+        <h1>Label state error</h1>
+        <span class="id">${id}</span>
+        <p>This label is active but has no linked inventory item.<br>
+           Contact the shop manager to fix this record.</p>
+      `));
+    }
     return res.send(page('Check Out', `
       <h1>Check out</h1>
       <span class="badge in">In stock</span>
@@ -187,16 +194,31 @@ router.post('/:id/in', (req, res) => {
       <h1>Missing fields</h1><p>Material, width, and height are required.</p>
     `));
   }
+  const validMaterials = new Set(MATERIALS.map(m => m.id));
+  const validItemTypes = new Set(ITEM_TYPES.map(t => t.id));
+  if (!validMaterials.has(material)) {
+    return res.status(400).send(page('Invalid input', `
+      <h1>Invalid material</h1><p>Unknown material: ${material.slice(0, 40)}</p>
+    `));
+  }
+  const safeItemType = validItemTypes.has(item_type) ? item_type : 'blank';
+  const w = parseFloat(width);
+  const h = parseFloat(height);
+  if (!isFinite(w) || w <= 0 || w > 500 || !isFinite(h) || h <= 0 || h > 500) {
+    return res.status(400).send(page('Invalid dimensions', `
+      <h1>Invalid dimensions</h1><p>Width and height must be between 0 and 500 inches.</p>
+    `));
+  }
   const ts = now();
   db.prepare(
     `INSERT INTO inventory
        (item_type, material, width, height, thickness, quantity, sku, notes, unit_cost, label_id, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, 1, '', ?, 0, ?, ?, ?)`
   ).run(
-    item_type || 'blank',
+    safeItemType,
     material,
-    parseFloat(width),
-    parseFloat(height),
+    w,
+    h,
     thickness || '1/8',
     notes || '',
     id, ts, ts
