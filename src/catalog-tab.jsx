@@ -373,6 +373,8 @@ function ProductRow({ product, file, onHand, catalogFiles, onFileChange, showToa
     }
   };
 
+  const shopColor = (SHOP_META[product.shop_id] ?? {}).color ?? "#555";
+
   return (
     <>
       <div style={{
@@ -380,6 +382,7 @@ function ProductRow({ product, file, onHand, catalogFiles, onFileChange, showToa
         gridTemplateColumns: "44px 1fr 190px 80px 80px",
         alignItems: "center", gap: 14, padding: "10px 16px",
         borderTop: "1px solid var(--border)", background: "var(--bg-surface)",
+        borderLeft: `3px solid ${shopColor}`,
       }}>
         {/* Thumbnail */}
         <div style={{
