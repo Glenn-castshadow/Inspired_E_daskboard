@@ -18,6 +18,9 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'castshadow-inventory', version: '1.0.0' });
 });
 
+// Scan routes — no auth required (iPhone users, no API key)
+app.use('/m', require('./routes/scan'));
+
 // ── All routes below require a valid API key ─────────────────────────────────
 app.use(requireApiKey);
 
