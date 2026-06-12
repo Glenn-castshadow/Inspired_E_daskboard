@@ -1015,7 +1015,7 @@ async fn load_one_shop_orders(
         .filter_map(|o| serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j)))
         .collect();
     let _ = cache.upsert_orders(&rows);
-    let _ = cache.mark_shop_synced(shop_id);
+    let _ = cache.mark_shop_synced(shop_id, now_unix());
 
     orders
 }

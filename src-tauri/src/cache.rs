@@ -334,6 +334,21 @@ impl CacheDb {
         tx.commit().map_err(|e| e.to_string())
     }
 
+    /// Delete cached orders by id — used to evict receipts Etsy reports as
+    /// Canceled, which would otherwise linger in the cache forever.
+    pub fn delete_orders(&self, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        for id in ids {
+            tx.execute("DELETE FROM orders WHERE id = ?1", params![id])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     /// Return JSON blobs for all cached orders belonging to the given shops.
     pub fn get_orders_for_shops(&self, shop_ids: &[u64]) -> Result<Vec<String>, String> {
         if shop_ids.is_empty() {
@@ -361,9 +376,8 @@ impl CacheDb {
 
     // ── Shop sync timestamps ──────────────────────────────────────────────────
 
-    /// Seconds elapsed since this shop's cache was last written.
-    /// Returns None if the shop has never been synced.
-    pub fn shop_age_secs(&self, shop_id: u64) -> Option<i64> {
+    /// Unix timestamp of the shop's last successful sync, if any.
+    pub fn shop_synced_at(&self, shop_id: u64) -> Option<i64> {
         let conn = self.conn.lock().unwrap();
         conn.query_row(
             "SELECT synced_at FROM shop_sync WHERE shop_id = ?1",
@@ -371,14 +385,20 @@ impl CacheDb {
             |row| row.get::<_, i64>(0),
         )
         .ok()
-        .map(|synced_at| now_unix() - synced_at)
     }
 
-    pub fn mark_shop_synced(&self, shop_id: u64) -> Result<(), String> {
+    pub fn shop_age_secs(&self, shop_id: u64) -> Option<i64> {
+        self.shop_synced_at(shop_id).map(|synced_at| now_unix() - synced_at)
+    }
+
+    /// Record a successful sync. Callers pass the time the fetch STARTED so
+    /// receipts modified mid-fetch fall after the mark and are caught by the
+    /// next delta.
+    pub fn mark_shop_synced(&self, shop_id: u64, synced_at: i64) -> Result<(), String> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO shop_sync (shop_id, synced_at) VALUES (?1, ?2)",
-            params![shop_id as i64, now_unix()],
+            params![shop_id as i64, synced_at],
         )
         .map_err(|e| e.to_string())?;
         Ok(())
@@ -1323,4 +1343,51 @@ pub fn export_catalog_file(
     let dest = exports_dir.join(&meta.filename);
     std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
     Ok(dest.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn test_db() -> CacheDb {
+        // rusqlite treats ":memory:" as an in-memory database; all migrations
+        // in CacheDb::new run against it (WAL pragma is a no-op there).
+        CacheDb::new(Path::new(":memory:")).expect("in-memory cache")
+    }
+
+    #[test]
+    fn delete_orders_removes_only_named_ids() {
+        let db = test_db();
+        db.upsert_orders(&[
+            ("IE-1".to_string(), 7, "{\"id\":\"IE-1\"}".to_string()),
+            ("IE-2".to_string(), 7, "{\"id\":\"IE-2\"}".to_string()),
+        ])
+        .unwrap();
+
+        db.delete_orders(&["IE-1".to_string()]).unwrap();
+
+        let rows = db.get_orders_for_shops(&[7]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains("IE-2"));
+    }
+
+    #[test]
+    fn delete_orders_empty_slice_is_noop() {
+        let db = test_db();
+        db.delete_orders(&[]).unwrap();
+    }
+
+    #[test]
+    fn mark_shop_synced_stores_explicit_timestamp() {
+        let db = test_db();
+        db.mark_shop_synced(7, 1_750_000_000).unwrap();
+        assert_eq!(db.shop_synced_at(7), Some(1_750_000_000));
+    }
+
+    #[test]
+    fn shop_synced_at_none_for_unknown_shop() {
+        let db = test_db();
+        assert_eq!(db.shop_synced_at(999), None);
+    }
 }
