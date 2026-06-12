@@ -628,6 +628,49 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
 
 // ── Order fetch ───────────────────────────────────────────────────────────────
 
+/// Build one page's receipts URL. `min_last_modified` (epoch seconds) asks
+/// Etsy for only receipts created/changed since then — new orders plus status
+/// flips (shipped, canceled) — which is what makes incremental sync possible.
+fn receipts_url(
+    shop_id: u64,
+    limit: u32,
+    offset: u32,
+    unshipped_only: bool,
+    min_last_modified: Option<i64>,
+) -> String {
+    // was_paid=true excludes abandoned carts.
+    // includes=Listings expands each transaction's listing data (image URLs).
+    let mut url = format!(
+        "{}/application/shops/{}/receipts?limit={}&offset={}&was_paid=true&includes=Listings",
+        ETSY_API_BASE, shop_id, limit, offset
+    );
+    if unshipped_only {
+        // The fulfillment queue only needs unshipped orders — a tiny slice of
+        // the full paid history.
+        url.push_str("&was_shipped=false");
+    }
+    if let Some(ts) = min_last_modified {
+        url.push_str(&format!("&min_last_modified={}", ts));
+    }
+    url
+}
+
+/// Split receipts into normalized active orders and the cache IDs of canceled
+/// receipts, so callers can evict the latter (see CacheDb::delete_orders).
+/// The ID format must match normalize(): "IE-{receipt_id}".
+fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<String>) {
+    let mut orders = Vec::new();
+    let mut canceled = Vec::new();
+    for r in receipts {
+        if r.status == "Canceled" {
+            canceled.push(format!("IE-{}", r.receipt_id));
+        } else {
+            orders.push(normalize(r, shop_id));
+        }
+    }
+    (orders, canceled)
+}
+
 async fn fetch_shop_orders(
     client: &Client,
     api_key: &str,
@@ -1549,4 +1592,52 @@ pub async fn import_credentials(
     }
 
     Ok(imported_ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receipts_url_without_min_last_modified() {
+        let url = receipts_url(6807617, 100, 0, false, None);
+        assert!(url.contains("/application/shops/6807617/receipts?"));
+        assert!(url.contains("limit=100"));
+        assert!(url.contains("offset=0"));
+        assert!(url.contains("was_paid=true"));
+        assert!(url.contains("includes=Listings"));
+        assert!(!url.contains("min_last_modified"));
+        assert!(!url.contains("was_shipped"));
+    }
+
+    #[test]
+    fn receipts_url_with_min_last_modified_and_unshipped() {
+        let url = receipts_url(6807617, 100, 200, true, Some(1_750_000_000));
+        assert!(url.contains("min_last_modified=1750000000"));
+        assert!(url.contains("was_shipped=false"));
+        assert!(url.contains("offset=200"));
+    }
+
+    #[test]
+    fn partition_receipts_splits_canceled_from_active() {
+        // Minimal valid receipts: Option / #[serde(default)] fields omitted.
+        let receipts: Vec<Receipt> = serde_json::from_str(
+            r#"[
+                {"receipt_id": 111, "status": "Paid",
+                 "name": "Active Buyer", "create_timestamp": 1700000000,
+                 "transactions": []},
+                {"receipt_id": 222, "status": "Canceled",
+                 "name": "Gone Buyer", "create_timestamp": 1700000000,
+                 "transactions": []}
+            ]"#,
+        )
+        .unwrap();
+
+        let (orders, canceled) = partition_receipts(receipts, 6807617);
+
+        assert_eq!(orders.len(), 1);
+        assert_eq!(orders[0].id, "IE-111");
+        assert_eq!(orders[0].shop_id, 6807617);
+        assert_eq!(canceled, vec!["IE-222".to_string()]);
+    }
 }
