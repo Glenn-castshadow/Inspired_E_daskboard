@@ -85,10 +85,15 @@ class BlobHeatLayer extends L.Layer {
       const pt = map.latLngToContainerPoint(L.latLng(lat, lng));
       const r  = Math.round(21 + weight * 33); // blob radius 21–54 px (1.5× original)
 
+      const midColor  = grad.mid(weight);
+      // Fade to the same hue as mid but fully transparent so the canvas
+      // interpolates colour→transparent instead of colour→black.
+      const edgeColor = midColor.replace(/,[\d.]+\)$/, ',0)');
+
       const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, r);
       g.addColorStop(0,    grad.center(weight));
-      g.addColorStop(0.45, grad.mid(weight));
-      g.addColorStop(1,    'hsla(0,0%,0%,0)');
+      g.addColorStop(0.45, midColor);
+      g.addColorStop(1,    edgeColor);
 
       ctx.beginPath();
       ctx.fillStyle = g;

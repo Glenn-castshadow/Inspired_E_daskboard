@@ -253,9 +253,15 @@ export default function MapView({ orders = [], loading = false, error = null, on
   const needsOrigin = arcsActive && heatPoints.length > 0 && !originEntry;
 
   return (
-    <div className="flex h-[calc(100vh-49px)] w-full overflow-hidden bg-slate-900 text-white">
+    <div
+      className="flex h-[calc(100vh-49px)] w-full overflow-hidden"
+      style={{ background: "var(--bg-canvas)", color: "var(--text)" }}
+    >
       {/* ── Sidebar ── */}
-      <aside className="w-64 flex-shrink-0 flex flex-col gap-3 p-4 bg-[#061526] border-r border-slate-700 overflow-y-auto">
+      <aside
+        className="w-64 flex-shrink-0 flex flex-col gap-3 p-4 overflow-y-auto"
+        style={{ background: "var(--bg-surface)", borderRight: "1px solid var(--border)" }}
+      >
 
         {/* ── Data summary ── */}
         <CollapsibleSection title="Live Orders">

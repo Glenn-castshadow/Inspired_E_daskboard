@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { SHOP_META } from "./config";
 import { categoryLabel } from "./taxonomy.js";
 import { QueueCutWidget } from "./lightburn-tab.jsx";
+import { PageHeader, PageShell, ghostButtonStyle } from "./ui.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -477,7 +478,7 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
 
         {/* Expand chevron */}
         <div style={{
-          color: "#ccc", fontSize: 14, textAlign: "center",
+          color: "#ccc", fontSize: 42, textAlign: "center", lineHeight: 1,
           transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
           transition: "transform 0.2s",
         }}>
@@ -798,46 +799,27 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
   ];
 
   return (
-    <div style={{
-      height: "100%",
-      minHeight: 0,
-      display: "flex", flexDirection: "column", overflow: "hidden",
-      background: "var(--bg-canvas)",
-      padding: "32px 40px 0",
-      fontFamily: "'DM Sans', sans-serif",
-      color: "var(--text)",
-    }}>
+    <PageShell fillParent>
       {/* Header */}
-      <div style={{ marginBottom: 28, flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em" }}>
-            Genevieve Etsy Dashboard
-          </div>
+      <PageHeader
+        title="Fulfillment"
+        subtitle={(
+          <>
+            Order fulfillment queue · sorted by due date
+            {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`}
+          </>
+        )}
+        actions={(
           <button
             onClick={() => onRefresh()}
             disabled={loading}
-            style={{
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: 12,
-              color: loading ? "#ccc" : "#888",
-              background: "none",
-              border: "none",
-              cursor: loading ? "default" : "pointer",
-              padding: "4px 0",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-            }}
+            style={ghostButtonStyle(loading)}
           >
             <span style={{ fontSize: 14, display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>↻</span>
             {loading && orders.length > 0 ? "Updating…" : "Refresh"}
           </button>
-        </div>
-        <div style={{ fontSize: 13, color: "var(--text-faint)", marginTop: 3 }}>
-          Order fulfillment queue · sorted by due date
-          {lastUpdated && ` · updated ${lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`}
-        </div>
-      </div>
+        )}
+      />
 
       {/* Daily summary banner — surfaces today's urgent work */}
       {orders.length > 0 && (
@@ -1089,7 +1071,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
           onClose={() => setPickListOpen(false)}
         />
       )}
-    </div>
+    </PageShell>
   );
 }
 

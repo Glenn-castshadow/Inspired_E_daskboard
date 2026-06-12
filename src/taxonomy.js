@@ -10,15 +10,23 @@
 //   DESIGN   = free design code (e.g. RBH = Robie House)
 
 // ── Materials (physical stock substrate) ────────────────────────────────────
+// These are the finishes we stock as raw sheets — same list as FINISHES below,
+// kept in this id/label/color shape for the inventory MatChip. Order matches
+// the Etsy variant dropdown.
 export const MATERIALS = [
-  { id: "plywood",         label: "Plywood",        color: "#b5885a" },
-  { id: "raw_mdf",         label: "Raw MDF",         color: "#9e9e9e" },
-  { id: "copper_mdf",      label: "Copper MDF",      color: "#b87333" },
-  { id: "gold_foil_mdf",   label: "Gold Foil",       color: "#c9a84c" },
-  { id: "silver_foil_mdf", label: "Silver Foil",     color: "#8a9ba8" },
-  { id: "black_foil_mdf",  label: "Black Foil",      color: "#444"    },
-  { id: "white_foil_mdf",  label: "White Foil",      color: "#aaa"    },
-  { id: "custom",          label: "Other / Custom",  color: "#7c6f9f" },
+  { id: "copper_leaf",        label: "Copper Leaf",        color: "#b87333" },
+  { id: "copper",             label: "Copper",             color: "#c87f4d" },
+  { id: "copper_patina_foil", label: "Copper Patina Foil", color: "#4a9b8e" },
+  { id: "gold_leaf",          label: "Gold Leaf",          color: "#c9a84c" },
+  { id: "maple",              label: "Maple",              color: "#d9c08a" },
+  { id: "cherry",             label: "Cherry",             color: "#a0522d" },
+  { id: "walnut",             label: "Walnut",             color: "#5c4033" },
+  { id: "white_oak",          label: "White Oak",          color: "#c2a378" },
+  { id: "aromatic_cedar",     label: "Aromatic Cedar",     color: "#b5835a" },
+  { id: "mahogany",           label: "Mahogany",           color: "#7b3f2f" },
+  { id: "sapele",             label: "Sapele",             color: "#964b2e" },
+  { id: "mdf",                label: "MDF (Unfinished)",   color: "#9e9e9e" },
+  { id: "custom",             label: "Other / Custom",     color: "#7c6f9f" },
 ];
 
 // ── Categories (first SKU segment) ──────────────────────────────────────────
@@ -35,9 +43,10 @@ export const CATEGORIES = [
 ];
 
 // ── Finishes (trailing SKU segment) ─────────────────────────────────────────
+// Order matches the Etsy variant dropdown.
 export const FINISHES = [
-  { code: "CU",  label: "Copper"             },
   { code: "CL",  label: "Copper Leaf"        },
+  { code: "CU",  label: "Copper"             },
   { code: "CPF", label: "Copper Patina Foil" },
   { code: "GL",  label: "Gold Leaf"          },
   { code: "MA",  label: "Maple"              },
@@ -47,9 +56,7 @@ export const FINISHES = [
   { code: "AC",  label: "Aromatic Cedar"     },
   { code: "MH",  label: "Mahogany"           },
   { code: "SP",  label: "Sapele"             },
-  { code: "UB",  label: "Unfinished Birch"   },
-  { code: "UC",  label: "Unfinished Cherry"  },
-  { code: "MDF", label: "MDF"                },
+  { code: "MDF", label: "MDF (Unfinished)"   },
 ];
 
 // ── Inventory item types ────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ import {
 import { SHOP_META, SHOP_IDS } from "./config";
 import { categoryLabel } from "./taxonomy.js";
 import AnalyticsHistory from "./analytics-history.jsx";
+import { PageHeader, PageShell, ghostButtonStyle } from "./ui.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -433,95 +434,69 @@ export default function EtsyDashboard({ theme = "light", orders = [], loading = 
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{
-      height: "calc(100vh - 48px)",
-      overflowY: "auto",
-      background: "var(--bg-canvas)", color: "var(--text)",
-      padding: "32px 40px",
-      fontFamily: "'DM Sans', sans-serif",
-    }}>
+    <PageShell scroll padBottom={32}>
       {/* Header */}
-      <div style={{ marginBottom: 28 }}>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <div style={{
-            fontFamily: "'Playfair Display', serif",
-            fontSize: 26,
-            fontWeight: 700,
-            color: "var(--text)",
-            letterSpacing: "-0.02em",
-          }}>
-            Genevieve Etsy Dashboard
+      <PageHeader
+        title="Analytics"
+        subtitle={(
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {focusedShopId != null ? (
+              <>
+                <span>Focused on </span>
+                <span style={{
+                  fontWeight: 600,
+                  color: "#fff",
+                  background: SHOP_META[focusedShopId]?.color || "#888",
+                  padding: "2px 10px",
+                  borderRadius: 10,
+                  fontSize: 11,
+                }}>
+                  {SHOP_META[focusedShopId]?.name || `Shop ${focusedShopId}`}
+                </span>
+                <button
+                  onClick={() => setFocusedShopId(null)}
+                  style={{
+                    fontSize: 11, fontFamily: "'DM Sans', sans-serif",
+                    color: "var(--text-muted)", background: "none",
+                    border: "1px solid var(--border)", borderRadius: 6,
+                    padding: "2px 8px", cursor: "pointer",
+                  }}
+                >
+                  clear x
+                </button>
+              </>
+            ) : (
+              <span>Sales analytics · click a bar to focus on one shop</span>
+            )}
+            {lastUpdated && (
+              <span style={{ color: "var(--text-fainter)" }}>
+                · updated {lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
+              </span>
+            )}
           </div>
+        )}
+        actions={(
           <button
             onClick={() => onRefresh()}
             disabled={loading}
-            style={{
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: 12,
-              color: loading ? "#ccc" : "#888",
-              background: "none",
-              border: "none",
-              cursor: loading ? "default" : "pointer",
-              padding: "4px 0",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-            }}
+            style={ghostButtonStyle(loading)}
           >
             <span style={{ fontSize: 14, display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>↻</span>
             {loading && orders.length > 0 ? "Updating…" : "Refresh"}
           </button>
-        </div>
-        <div style={{ fontSize: 13, color: "var(--text-faint)", marginTop: 3, display: "flex", alignItems: "center", gap: 10 }}>
-          {focusedShopId != null ? (
-            <>
-              <span>Focused on </span>
-              <span style={{
-                fontWeight: 600,
-                color: "#fff",
-                background: SHOP_META[focusedShopId]?.color || "#888",
-                padding: "2px 10px",
-                borderRadius: 10,
-                fontSize: 11,
-                letterSpacing: "0.03em",
-              }}>
-                {SHOP_META[focusedShopId]?.name || `Shop ${focusedShopId}`}
-              </span>
-              <button
-                onClick={() => setFocusedShopId(null)}
-                style={{
-                  fontSize: 11, fontFamily: "'DM Sans', sans-serif",
-                  color: "var(--text-muted)", background: "none",
-                  border: "1px solid var(--border)", borderRadius: 6,
-                  padding: "2px 8px", cursor: "pointer",
-                }}
-              >
-                clear ×
-              </button>
-            </>
-          ) : (
-            <span>Sales analytics · click a bar to focus on one shop</span>
-          )}
-          {lastUpdated && (
-            <span style={{ color: "var(--text-fainter)" }}>
-              · updated {lastUpdated.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}
-            </span>
-          )}
-        </div>
-
+        )}
+      >
         {/* Date range */}
-        <div style={{ marginTop: 16 }}>
-          <DateRangeControl
-            preset={datePreset}
-            from={customFrom}
-            to={customTo}
-            onPreset={(id) => { setDatePreset(id); setCustomFrom(""); setCustomTo(""); }}
-            onFrom={(v) => { setCustomFrom(v); setDatePreset("custom"); }}
-            onTo={(v) => { setCustomTo(v); setDatePreset("custom"); }}
-            onClear={() => { setDatePreset("all"); setCustomFrom(""); setCustomTo(""); }}
-          />
-        </div>
-      </div>
+        <DateRangeControl
+          preset={datePreset}
+          from={customFrom}
+          to={customTo}
+          onPreset={(id) => { setDatePreset(id); setCustomFrom(""); setCustomTo(""); }}
+          onFrom={(v) => { setCustomFrom(v); setDatePreset("custom"); }}
+          onTo={(v) => { setCustomTo(v); setDatePreset("custom"); }}
+          onClear={() => { setDatePreset("all"); setCustomFrom(""); setCustomTo(""); }}
+        />
+      </PageHeader>
 
       {/* Error state */}
       {error && (
@@ -761,7 +736,6 @@ export default function EtsyDashboard({ theme = "light", orders = [], loading = 
           />
         </div>
       </div>
-
-    </div>
+    </PageShell>
   );
 }

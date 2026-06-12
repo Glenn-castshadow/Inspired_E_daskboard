@@ -3,6 +3,7 @@ import {
   MATERIALS, CATEGORIES, FINISHES, ITEM_TYPES,
   CAT_MAP, FIN_MAP, matMeta, parseSku,
 } from "./taxonomy.js";
+import { PageHeader, PageShell, SubTabBar } from "./ui.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -14,15 +15,15 @@ export { MATERIALS, CATEGORIES, FINISHES };
 // ── Mock data (Vite preview only) ─────────────────────────────────────────────
 
 const MOCK_INVENTORY = [
-  { id: 1, item_type: "sheet",    material: "plywood",       width: 48, height: 96, thickness: "1/4", quantity: 3, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
-  { id: 2, item_type: "sheet",    material: "raw_mdf",       width: 48, height: 96, thickness: "1/8", quantity: 5, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
-  { id: 3, item_type: "blank",    material: "copper_mdf",    width: 12, height: 18, thickness: "1/8", quantity: 7, sku: "DBC-RBH-SM-CU", notes: "",                 created_at: 0, updated_at: 0 },
-  { id: 4, item_type: "blank",    material: "gold_foil_mdf", width: 8,  height: 12, thickness: "1/8", quantity: 4, sku: "ORN-RBH4-CPF",  notes: "Mixed pattern",    created_at: 0, updated_at: 0 },
-  { id: 5, item_type: "blank",    material: "copper_mdf",    width: 6,  height: 9,  thickness: "1/8", quantity: 2, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
-  { id: 6, item_type: "finished", material: "copper_mdf",    width: 12, height: 18, thickness: "1/8", quantity: 2, sku: "DBC-RBH-SM-CU", notes: "Display + extra",  created_at: 0, updated_at: 0 },
-  { id: 7, item_type: "finished", material: "gold_foil_mdf", width: 9,  height: 12, thickness: "1/8", quantity: 1, sku: "CLM-LOT-CU",    notes: "Photo prop",       created_at: 0, updated_at: 0 },
-  { id: 8, item_type: "offcut",   material: "copper_mdf",    width: 8,  height: 6,  thickness: "1/8", quantity: 1, sku: "", notes: "From 12×18 cut", label_id: "mock-label-001", created_at: 0, updated_at: 0 },
-  { id: 9, item_type: "offcut",   material: "raw_mdf",       width: 10, height: 8,  thickness: "1/8", quantity: 1, sku: "", notes: "",               label_id: "mock-label-002", created_at: 0, updated_at: 0 },
+  { id: 1, item_type: "sheet",    material: "cherry",   width: 30, height: 20, thickness: "1/4", quantity: 3, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
+  { id: 2, item_type: "sheet",    material: "mdf",      width: 30, height: 20, thickness: "1/8", quantity: 5, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
+  { id: 3, item_type: "blank",    material: "cherry",   width: 12, height: 20, thickness: "1/8", quantity: 7, sku: "DBC-RBH-SM-CU", notes: "",                 created_at: 0, updated_at: 0 },
+  { id: 4, item_type: "blank",    material: "mahogany", width: 12, height: 20, thickness: "1/8", quantity: 4, sku: "ORN-RBH4-CPF",  notes: "Mixed pattern",    created_at: 0, updated_at: 0 },
+  { id: 5, item_type: "blank",    material: "walnut",   width: 12, height: 20, thickness: "1/8", quantity: 2, sku: "",              notes: "",                 created_at: 0, updated_at: 0 },
+  { id: 6, item_type: "finished", material: "cherry",   width: 12, height: 20, thickness: "1/8", quantity: 2, sku: "DBC-RBH-SM-CU", notes: "Display + extra",  created_at: 0, updated_at: 0 },
+  { id: 7, item_type: "finished", material: "maple",    width: 12, height: 20, thickness: "1/8", quantity: 1, sku: "CLM-LOT-CU",    notes: "Photo prop",       created_at: 0, updated_at: 0 },
+  { id: 8, item_type: "offcut",   material: "cherry",   width: 8,  height: 6,  thickness: "1/8", quantity: 1, sku: "", notes: "From 12×20 cut", label_id: "mock-label-001", created_at: 0, updated_at: 0 },
+  { id: 9, item_type: "offcut",   material: "mdf",      width: 10, height: 8,  thickness: "1/8", quantity: 1, sku: "", notes: "",               label_id: "mock-label-002", created_at: 0, updated_at: 0 },
 ];
 
 const MOCK_LABEL_COUNTS = { unassigned: 25, active: 8, retired: 3 };
@@ -41,9 +42,9 @@ const LABEL_STOCKS = [
 ];
 
 const MOCK_PRODUCTS = [
-  { id: 1, sku: "DBC-RBH-SM-CU",  name: "Robie House Chime - Small",   category: "DBC", design: "RBH", finish: "CU",  width: 12, height: 18, thickness: "1/8", material: "copper_mdf",    notes: "", active: true, created_at: 0, updated_at: 0 },
-  { id: 2, sku: "CLM-LOT-CU",     name: "Lotus Column",                category: "CLM", design: "LOT", finish: "CU",  width: 9,  height: 12, thickness: "1/8", material: "copper_mdf",    notes: "", active: true, created_at: 0, updated_at: 0 },
-  { id: 3, sku: "ORN-RBH4-CPF",   name: "Robie 4-Pack Ornament",       category: "ORN", design: "RBH", finish: "CPF", width: 8,  height: 12, thickness: "1/8", material: "gold_foil_mdf", notes: "", active: true, created_at: 0, updated_at: 0 },
+  { id: 1, sku: "DBC-RBH-SM-CU",  name: "Robie House Chime - Small",   category: "DBC", design: "RBH", finish: "CU",  width: 12, height: 20, thickness: "1/8", material: "cherry",   notes: "", active: true, created_at: 0, updated_at: 0 },
+  { id: 2, sku: "CLM-LOT-CU",     name: "Lotus Column",                category: "CLM", design: "LOT", finish: "CU",  width: 12, height: 20, thickness: "1/8", material: "cherry",   notes: "", active: true, created_at: 0, updated_at: 0 },
+  { id: 3, sku: "ORN-RBH4-CPF",   name: "Robie 4-Pack Ornament",       category: "ORN", design: "RBH", finish: "CPF", width: 12, height: 20, thickness: "1/8", material: "mahogany", notes: "", active: true, created_at: 0, updated_at: 0 },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -67,6 +68,7 @@ function LabelPool({ serverUrl }) {
   const [stock, setStock]       = useState("rollo_2x1");
   const [busy, setBusy]         = useState(false);
   const [open, setOpen]         = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const loadCounts = useCallback(async () => {
     const data = await invokeOrMock("get_label_pool_counts", {}, () => MOCK_LABEL_COUNTS);
@@ -100,16 +102,23 @@ function LabelPool({ serverUrl }) {
     if (nextStock) setStock(nextStock);
   };
 
-  const openPrintPage = async (autoPrint) => {
-    if (!serverUrl) return;
+  const labelLimit = () => Math.max(1, Math.min(Number(printN) || 1, counts?.unassigned || 1));
+
+  const printUrl = (autoPrint = false) => {
+    if (!serverUrl) return "";
     const base = serverUrl.replace(/\/$/, "");
     const params = new URLSearchParams({
       stock,
       printer,
-      limit: String(Math.max(1, Math.min(Number(printN) || 1, counts?.unassigned || 1))),
+      limit: String(labelLimit()),
       autoprint: autoPrint ? "1" : "0",
     });
-    const url = `${base}/labels/print?${params.toString()}`;
+    return `${base}/labels/print?${params.toString()}`;
+  };
+
+  const openPrintPage = async (autoPrint) => {
+    const url = printUrl(autoPrint);
+    if (!url) return;
     if (isTauri) {
       const { open: shellOpen } = await import("@tauri-apps/plugin-shell");
       shellOpen(url).catch(console.error);
@@ -239,7 +248,7 @@ function LabelPool({ serverUrl }) {
           </label>
           {serverUrl && (
             <button
-              onClick={() => openPrintPage(false)}
+              onClick={() => setPreviewOpen(p => !p)}
               disabled={!counts?.unassigned}
               style={{
                 ...btnSecondary,
@@ -247,7 +256,7 @@ function LabelPool({ serverUrl }) {
                 cursor: !counts?.unassigned ? "not-allowed" : "pointer",
               }}
             >
-              Preview
+              {previewOpen ? "Hide preview" : "Preview"}
             </button>
           )}
           {serverUrl ? (
@@ -270,6 +279,38 @@ function LabelPool({ serverUrl }) {
             <span style={{ fontSize: 12, color: "var(--text-faint)", fontFamily: "'DM Sans', sans-serif" }}>
               (Print requires inventory server)
             </span>
+          )}
+          {previewOpen && serverUrl && counts?.unassigned > 0 && (
+            <div style={{
+              flexBasis: "100%",
+              marginTop: 4,
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              overflow: "hidden",
+              background: "var(--bg-canvas)",
+            }}>
+              <div style={{
+                padding: "9px 12px",
+                borderBottom: "1px solid var(--border)",
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: 12,
+                color: "var(--text-muted)",
+              }}>
+                Layout preview · {LABEL_STOCKS.find(s => s.key === stock)?.label ?? stock} · {labelLimit()} labels
+              </div>
+              <iframe
+                key={printUrl(false)}
+                title="Label print layout preview"
+                src={printUrl(false)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  height: printer === "laser" ? 420 : 260,
+                  border: "none",
+                  background: "#fff",
+                }}
+              />
+            </div>
           )}
         </div>
       )}
@@ -419,7 +460,7 @@ function QtyCell({ item, reconcileMode, onAdjust, onSet }) {
 // ── Add / Edit inventory item form ────────────────────────────────────────────
 
 const BLANK_FORM = {
-  item_type: "blank", material: "copper_mdf",
+  item_type: "blank", material: "cherry",
   width: "", height: "", thickness: "1/8", quantity: "1", sku: "", notes: "", unit_cost: "",
 };
 
@@ -720,7 +761,7 @@ function EditModal({ item, onSave, onClose }) {
 
 const BLANK_PRODUCT = {
   sku: "", name: "", category: "DBC", design: "", finish: "CU",
-  width: "", height: "", thickness: "1/8", material: "copper_mdf", notes: "",
+  width: "", height: "", thickness: "1/8", material: "cherry", notes: "",
 };
 
 function ProductForm({ initial = BLANK_PRODUCT, onSave, onCancel }) {
@@ -1343,28 +1384,13 @@ export default function InventoryTab() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{
-      height: "calc(100vh - 48px)",
-      display: "flex", flexDirection: "column", overflow: "hidden",
-      background: "var(--bg-canvas)",
-      padding: "32px 40px 0",
-      fontFamily: "'DM Sans', sans-serif",
-    }}>
-      <LabelPool serverUrl={serverUrl} />
+    <PageShell>
       {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "flex-start",
-        justifyContent: "space-between", marginBottom: 20,
-      }}>
-        <div>
-          <div style={{ fontFamily: "'Playfair Display', serif", fontSize: 26, fontWeight: 700, color: "var(--text)" }}>
-            Material Inventory
-          </div>
-          <div style={{ fontSize: 13, color: "var(--text-faint)", marginTop: 3 }}>
-            Laser sheet goods · plywood, MDF &amp; prepared blanks
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <PageHeader
+        title="Inventory"
+        subtitle="Laser sheet goods · plywood, MDF & prepared blanks"
+        actions={(
+          <>
           {/* Gear / server settings */}
           <button
             onClick={() => setShowSettings(true)}
@@ -1391,34 +1417,13 @@ export default function InventoryTab() {
             </button>
           </div>
         )}
-        </div>  {/* end right-side button group */}
-      </div>
+          </>
+        )}
+      />
+      <LabelPool serverUrl={serverUrl} />
 
       {/* Sub-tab nav */}
-      <div style={{
-        display: "flex", gap: 2, marginBottom: 28,
-        borderBottom: "1px solid var(--border)",
-      }}>
-        {SUB_TABS.map(t => (
-          <button
-            key={t.key}
-            onClick={() => setSubTab(t.key)}
-            style={{
-              padding: "7px 16px 9px",
-              background: "none", border: "none",
-              borderBottom: subTab === t.key ? "2px solid var(--accent)" : "2px solid transparent",
-              marginBottom: "-1px",
-              cursor: "pointer",
-              fontFamily: "'DM Sans', sans-serif",
-              fontSize: 13,
-              fontWeight: subTab === t.key ? 600 : 400,
-              color: subTab === t.key ? "var(--accent)" : "var(--text-muted)",
-              letterSpacing: "0.01em",
-              transition: "color 0.15s, border-color 0.15s",
-            }}
-          >{t.label}</button>
-        ))}
-      </div>
+      <SubTabBar tabs={SUB_TABS} active={subTab} onChange={setSubTab} />
 
       {/* Scrollable content area */}
       <div style={{ flex: 1, overflowY: "auto", paddingBottom: 48 }}>
@@ -1499,6 +1504,6 @@ export default function InventoryTab() {
 
       {/* Server settings modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-    </div>
+    </PageShell>
   );
 }

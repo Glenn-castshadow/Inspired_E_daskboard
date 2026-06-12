@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { SHOP_META } from "./config.js";
 import { categoryLabel, skuBase as toSkuBase, CATEGORIES } from "./taxonomy.js";
+import { PageHeader, PageShell } from "./ui.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -896,17 +897,18 @@ export default function CatalogTab({ activeListingSync }) {
   const searchBg = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cpath d='m21 21-4.35-4.35'/%3E%3C/svg%3E\")";
 
   return (
-    <div style={{ height: "calc(100vh - 48px)", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <PageShell>
       {/* Header */}
-      <div style={{ padding: "28px 40px 14px", maxWidth: 1100, flexShrink: 0 }}>
-        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>
-          Listings
-        </h2>
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+      <PageHeader
+        title="Listings"
+        style={{ maxWidth: 1100, marginBottom: 14 }}
+        subtitle={(
+          <>
           Every active Etsy listing, plus anything ever ordered — durable even after a listing is removed.
           Link Lightburn files in the Ingest tab.
-        </p>
-      </div>
+          </>
+        )}
+      />
 
       <ListingSyncBanner status={activeListingSync} />
 
@@ -914,7 +916,7 @@ export default function CatalogTab({ activeListingSync }) {
       <div style={{
         flexShrink: 0,
         background: "var(--bg-canvas)", borderBottom: "1px solid var(--border)",
-        padding: "12px 40px 13px",
+        padding: "12px 0 13px",
       }}>
         {/* Row 1 — shop switcher */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 11 }}>
@@ -972,7 +974,7 @@ export default function CatalogTab({ activeListingSync }) {
       </div>
 
       {/* List — scrolls independently */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "22px 40px 48px", maxWidth: 1100 }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "22px 0 48px", maxWidth: 1100 }}>
         {loading ? (
           <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)" }}>Loading…</div>
         ) : catalog.length === 0 ? (
@@ -1025,6 +1027,6 @@ export default function CatalogTab({ activeListingSync }) {
           {toast.msg}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }

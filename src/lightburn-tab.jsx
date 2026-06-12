@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { CATEGORIES } from "./taxonomy.js";
 import { SHOP_META } from "./config.js";
+import { PageHeader, PageShell } from "./ui.jsx";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -808,21 +809,17 @@ export default function LightburnTab({ orders = [] }) {
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      height: "calc(100vh - 48px)",
-      display: "flex", flexDirection: "column", overflow: "hidden",
-      padding: "32px 40px 0", maxWidth: 1180,
-    }}>
+    <PageShell maxWidth={1180}>
 
-      <div style={{ marginBottom: 28 }}>
-        <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, margin: 0, color: "var(--text)" }}>
-          Ingest
-        </h2>
-        <p style={{ fontFamily: "'DM Sans', sans-serif", fontSize: 13, color: "var(--text-faint)", margin: "6px 0 0" }}>
+      <PageHeader
+        title="Ingest"
+        subtitle={(
+          <>
           One Lightburn file per base product. Drag a .lbrn2 onto this window or click below to add it to the library.
           Link products to files here, then browse the Listings tab.
-        </p>
-      </div>
+          </>
+        )}
+      />
 
       {/* Drop zone */}
       <div
@@ -861,8 +858,8 @@ export default function LightburnTab({ orders = [] }) {
         </div>
       )}
 
-      {/* Library + orders — scrollable */}
-      <div style={{ flex: 1, overflowY: "auto", paddingBottom: 48 }}>
+      {/* Library + orders */}
+      <div style={{ flex: 1, minHeight: 0, paddingBottom: 48 }}>
 
       {/* Library */}
       <div style={{ marginBottom: 36 }}>
@@ -989,7 +986,7 @@ export default function LightburnTab({ orders = [] }) {
           {toast.msg}
         </div>
       )}
-    </div>
+    </PageShell>
   );
 }
 
