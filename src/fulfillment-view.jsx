@@ -4,6 +4,7 @@ import { SHOP_META } from "./config";
 import { categoryLabel } from "./taxonomy.js";
 import { QueueCutWidget } from "./lightburn-tab.jsx";
 import { PageHeader, PageShell, ghostButtonStyle } from "./ui.jsx";
+import { applyTheme } from "./theme";
 
 const isTauri = typeof window !== "undefined" && Boolean(window.__TAURI__);
 
@@ -1142,24 +1143,26 @@ function PickList({ orders, familyByProduct = {}, onClose }) {
     style.textContent = `
       #pick-list-print-portal { display: none; }
       @media print {
+        html {
+          color-scheme: light !important;
+          --bg-canvas:    #f7f7f5 !important;
+          --bg-surface:   #ffffff !important;
+          --bg-muted:     #fafaf8 !important;
+          --border:       #e4e4e0 !important;
+          --border-muted: #ebebea !important;
+          --text:         #1a1a1a !important;
+          --text-muted:   #4d4d4d !important;
+          --text-faint:   #808080 !important;
+          --text-fainter: #b3b3b3 !important;
+          --accent:       #2D6A4F !important;
+          --accent-bg:    #f0faf4 !important;
+        }
         body > *:not(#pick-list-print-portal) { display: none !important; }
         #pick-list-print-portal {
           display: block !important;
           padding: 16px;
           background: #fff;
           color: #000;
-          color-scheme: light;
-          --bg-canvas: #f7f7f5;
-          --bg-surface: #ffffff;
-          --bg-muted: #fafaf8;
-          --border: #e4e4e0;
-          --border-muted: #ebebea;
-          --text: #1a1a1a;
-          --text-muted: #4d4d4d;
-          --text-faint: #808080;
-          --text-fainter: #b3b3b3;
-          --accent: #2D6A4F;
-          --accent-bg: #f0faf4;
         }
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       }
@@ -1317,7 +1320,29 @@ function PickList({ orders, familyByProduct = {}, onClose }) {
                 }}
               >Close</button>
               <button
-                onClick={() => window.print()}
+                onClick={() => {
+                  // WebView2's print path ignores the @media print variable
+                  // overrides on <html> (inline styles from applyTheme win in
+                  // its snapshot), so flip the live theme to light for the
+                  // duration of the print instead.
+                  const prevMode = document.documentElement.style.colorScheme === "dark" ? "dark" : "light";
+                  applyTheme("light");
+                  const restore = () => {
+                    window.removeEventListener("afterprint", restore);
+                    window.removeEventListener("focus", restore);
+                    applyTheme(prevMode);
+                  };
+                  window.addEventListener("afterprint", restore);
+                  // The system print dialog steals focus; it returns only after
+                  // print/cancel, so focus is a safe restore fallback in case
+                  // WebView2 never fires afterprint. A timeout is NOT safe:
+                  // WebView2 renders the page when the user clicks Print in the
+                  // dialog, which can be arbitrarily later.
+                  window.addEventListener("focus", restore);
+                  // Two frames so the repaint with light variables lands
+                  // before the engine snapshots the page.
+                  requestAnimationFrame(() => requestAnimationFrame(() => window.print()));
+                }}
                 style={{
                   fontSize: 13, fontWeight: 600,
                   color: "#fff", background: "var(--accent)",
