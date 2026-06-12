@@ -1166,6 +1166,18 @@ function PickList({ orders, familyByProduct = {}, onClose }) {
           padding: 16px;
           background: #fff;
           color: #000;
+          color-scheme: light;
+          --bg-canvas: #f7f7f5;
+          --bg-surface: #ffffff;
+          --bg-muted: #fafaf8;
+          --border: #e4e4e0;
+          --border-muted: #ebebea;
+          --text: #1a1a1a;
+          --text-muted: #4d4d4d;
+          --text-faint: #808080;
+          --text-fainter: #b3b3b3;
+          --accent: #2D6A4F;
+          --accent-bg: #f0faf4;
         }
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       }
