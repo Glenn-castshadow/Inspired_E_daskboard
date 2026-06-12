@@ -1,6 +1,6 @@
 [package]
 name = "etsy-dashboard"
-version = "0.1.99"
+version = "0.2.4"
 edition = "2021"
 build = "build.rs"
 
