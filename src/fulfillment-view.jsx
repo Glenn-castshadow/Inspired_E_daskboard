@@ -311,7 +311,7 @@ function OffcutBadge({ matches }) {
 }
 
 // ── Order Row ────────────────────────────────────────────────────────────────
-function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped }) {
+function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEntry, onTrackingLoad, isDark, selected, onSelect, onShipped, sellerNote, onSaveNote }) {
   useEffect(() => {
     if (!expanded || !order.postage_printed || !order.tracking_code || trackingEntry) return;
     onTrackingLoad(order.id, order.tracking_code);
@@ -405,6 +405,19 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
                 fontWeight: 600,
                 letterSpacing: "0.04em",
               }}>NOTE</span>
+            )}
+            {sellerNote?.trim().length > 0 && (
+              <span title={sellerNote} style={{
+                fontSize: 10,
+                background: "#d8f0ee",
+                color: "#15605a",
+                border: "1px solid #9eddd6",
+                borderRadius: 4,
+                padding: "1px 5px",
+                fontFamily: "'DM Sans', sans-serif",
+                fontWeight: 600,
+                letterSpacing: "0.04em",
+              }}>MY NOTE</span>
             )}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2, minWidth: 0, overflow: "hidden" }}>
@@ -509,6 +522,10 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
               highlight={hasInstructions && !isShipped}
             />
           </div>
+          <SellerNoteEditor
+            note={sellerNote}
+            onSave={(text) => onSaveNote(order.receipt_id, text)}
+          />
           {isShipped && order.tracking_code && (
             <div style={{
               borderTop: "1px solid var(--border-muted)",
@@ -536,6 +553,75 @@ function OrderRow({ order, family, offcutMatches, expanded, onToggle, trackingEn
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Seller note editor ────────────────────────────────────────────────────────
+// Our private note on an order. Local-only: Etsy's v3 API doesn't expose its
+// own private order notes, so the app is the system of record for these.
+function SellerNoteEditor({ note, onSave }) {
+  const [draft, setDraft] = useState(note);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setDraft(note); }, [note]);
+  const dirty = draft !== note;
+
+  const save = () => {
+    if (!dirty) return;
+    onSave(draft);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  };
+
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      style={{ borderTop: "1px solid var(--border-muted)", padding: "12px 20px 14px" }}
+    >
+      <div style={{
+        fontFamily: "'DM Sans', sans-serif",
+        fontSize: 10,
+        textTransform: "uppercase",
+        letterSpacing: "0.09em",
+        color: "var(--text-faint)",
+        marginBottom: 8,
+        display: "flex", alignItems: "center", gap: 8,
+      }}>
+        My note
+        <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--text-fainter)" }}>
+          local only — never sent to Etsy
+        </span>
+        {saved && <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--accent)" }}>Saved ✓</span>}
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          placeholder="Add a private note for this order…"
+          rows={2}
+          style={{
+            flex: 1, fontSize: 13, padding: "6px 10px",
+            fontFamily: "'DM Sans', sans-serif",
+            background: "var(--bg-surface)",
+            color: "var(--text)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            resize: "vertical",
+          }}
+        />
+        {dirty && (
+          <button
+            onClick={save}
+            style={{
+              fontSize: 12, fontWeight: 600,
+              color: "#fff", background: "var(--accent)",
+              border: "none", borderRadius: 6, padding: "6px 14px", cursor: "pointer",
+              fontFamily: "'DM Sans', sans-serif",
+            }}
+          >Save</button>
+        )}
+      </div>
     </div>
   );
 }
@@ -711,6 +797,30 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
     return m;
   }, [links]);
 
+  // Seller's private notes, keyed by receipt_id. Local-only — Etsy's v3 API
+  // has no field for its own private order notes, so the app is the system of
+  // record. Outside Tauri (Vite preview) notes live in memory only.
+  const [sellerNotes, setSellerNotes] = useState({});
+  useEffect(() => {
+    if (!isTauri) return;
+    import("@tauri-apps/api/core").then(({ invoke }) =>
+      invoke("list_seller_notes")
+        .then(rows => setSellerNotes(Object.fromEntries(rows.map(r => [r.receipt_id, r.note]))))
+        .catch(() => {}));
+  }, []);
+
+  const saveSellerNote = useCallback((receiptId, note) => {
+    setSellerNotes(prev => {
+      const next = { ...prev };
+      if (note.trim()) next[receiptId] = note; else delete next[receiptId];
+      return next;
+    });
+    if (isTauri) {
+      import("@tauri-apps/api/core").then(({ invoke }) =>
+        invoke("set_seller_note", { receiptId, note }).catch(() => {}));
+    }
+  }, []);
+
   // Load inventory once on mount so the offcut badge can filter labelled offcuts.
   // In non-Tauri (Vite preview) mode inventoryItems stays empty — badge is absent, which is fine.
   const [inventoryItems, setInventoryItems] = useState([]);
@@ -770,20 +880,26 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
       .finally(() => fetchingTracking.current.delete(orderId));
   }, []);
 
+  // "Notes" covers both the buyer's special instructions and our own local note.
+  const hasAnyNote = useCallback(
+    o => o.details.special_instructions?.trim().length > 0 || sellerNotes[o.receipt_id]?.trim().length > 0,
+    [sellerNotes]
+  );
+
   const filtered = useMemo(() => {
     let list = [...orders];
     if (filter === "open")    list = list.filter(o => o.status !== "completed");
     if (filter === "shipped") list = list.filter(o => o.status === "completed");
     if (filter === "overdue") list = list.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0);
-    if (filter === "notes")   list = list.filter(o => o.details.special_instructions?.trim().length > 0);
+    if (filter === "notes")   list = list.filter(hasAnyNote);
     if (filter === "urgent")  list = list.filter(o => o.status !== "completed" && daysUntil(o.due_date) <= 1);
     list.sort((a, b) => parseDue(a.due_date) - parseDue(b.due_date));
     return list;
-  }, [filter, orders]);
+  }, [filter, orders, hasAnyNote]);
 
   const openCount    = orders.filter(o => o.status !== "completed").length;
   const overdueCount = orders.filter(o => o.status !== "completed" && daysUntil(o.due_date) < 0).length;
-  const notesCount   = orders.filter(o => o.details.special_instructions?.trim().length > 0).length;
+  const notesCount   = orders.filter(hasAnyNote).length;
   const shippedCount = orders.filter(o => o.status === "completed").length;
 
   // Daily summary — urgent work for today
@@ -1014,6 +1130,8 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
             selected={selectedIds.has(order.id)}
             onSelect={toggleSelected}
             onShipped={() => loadOrders(true)}
+            sellerNote={sellerNotes[order.receipt_id] || ""}
+            onSaveNote={saveSellerNote}
           />
         ))}
       </div>
@@ -1069,6 +1187,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
         <PickList
           orders={orders.filter(o => selectedIds.has(o.id))}
           familyByProduct={familyByProduct}
+          sellerNotes={sellerNotes}
           onClose={() => setPickListOpen(false)}
         />
       )}
@@ -1118,7 +1237,7 @@ function StageBox({ checked, label, onClick }) {
   );
 }
 
-function PickList({ orders, familyByProduct = {}, onClose }) {
+function PickList({ orders, familyByProduct = {}, sellerNotes = {}, onClose }) {
   const [stages, setStages] = useState(() =>
     Object.fromEntries(orders.map(o => [o.id, { cut: false, assembled: false, packed: false }]))
   );
@@ -1129,13 +1248,18 @@ function PickList({ orders, familyByProduct = {}, onClose }) {
   // Portal div appended directly to <body> so print CSS can target it as a
   // direct child — avoids the duplicate-page bug caused by visibility:hidden
   // leaving the full dashboard layout in the print flow.
+  // Create the div in state but attach it in the effect: StrictMode runs the
+  // initializer twice (orphaning a duplicate) and remove()s on its fake
+  // unmount without re-attaching, leaving the real portal detached.
   const [printRoot] = useState(() => {
     const el = document.createElement("div");
     el.id = "pick-list-print-portal";
-    document.body.appendChild(el);
     return el;
   });
-  useEffect(() => () => printRoot.remove(), [printRoot]);
+  useEffect(() => {
+    if (!printRoot.isConnected) document.body.appendChild(printRoot);
+    return () => printRoot.remove();
+  }, [printRoot]);
 
   useEffect(() => {
     const style = document.createElement("style");
@@ -1270,6 +1394,17 @@ function PickList({ orders, familyByProduct = {}, onClose }) {
                   color: "#7a5c00",
                 }}>
                   <strong>Note:</strong> {notes}
+                </div>
+              )}
+              {sellerNotes[o.receipt_id]?.trim() && (
+                <div style={{
+                  padding: "6px 14px 8px 18px",
+                  borderTop: "1px solid var(--border-muted)",
+                  background: "#e9f6f4",
+                  fontFamily: "'DM Sans', sans-serif", fontSize: 11,
+                  color: "#15605a",
+                }}>
+                  <strong>Our note:</strong> {sellerNotes[o.receipt_id]}
                 </div>
               )}
             </div>

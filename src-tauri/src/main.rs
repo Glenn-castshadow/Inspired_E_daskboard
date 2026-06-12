@@ -122,6 +122,8 @@ fn main() {
             cache::seed_listing_links_from_mappings,
             cache::set_ad_spend,
             cache::list_ad_spend,
+            cache::set_seller_note,
+            cache::list_seller_notes,
             cache::save_catalog_file,
             cache::list_catalog_files,
             cache::delete_catalog_file,

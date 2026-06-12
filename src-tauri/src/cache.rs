@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::State;
 
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -300,6 +300,20 @@ impl CacheDb {
                 Err(e) if e.to_string().contains("duplicate column") => {}
                 Err(e) => return Err(e.to_string()),
             }
+        }
+
+        // ── v13: seller notes — local-only private notes per receipt (Etsy's
+        // own private order notes are not exposed in the v3 API) ─────────────
+        if version < 13 {
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS seller_notes (
+                    receipt_id TEXT    PRIMARY KEY,
+                    note       TEXT    NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
+                PRAGMA user_version = 13;",
+            )
+            .map_err(|e| e.to_string())?;
         }
 
         let final_version: i32 = conn
@@ -902,6 +916,40 @@ impl CacheDb {
         rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
     }
 
+    // ── Seller notes (local-only private notes per receipt) ──────────────────
+
+    /// Set or clear the seller's private note for a receipt. An empty/blank
+    /// note deletes the row so the badge logic can treat absence as "no note".
+    pub fn set_seller_note(&self, receipt_id: &str, note: &str) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        if note.trim().is_empty() {
+            conn.execute("DELETE FROM seller_notes WHERE receipt_id = ?1", params![receipt_id])
+                .map_err(|e| e.to_string())?;
+        } else {
+            conn.execute(
+                "INSERT INTO seller_notes (receipt_id, note, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(receipt_id) DO UPDATE SET note = excluded.note, updated_at = excluded.updated_at",
+                params![receipt_id, note, now_unix()],
+            ).map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    }
+
+    pub fn list_seller_notes(&self) -> Result<Vec<SellerNote>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT receipt_id, note FROM seller_notes"
+        ).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SellerNote {
+                receipt_id: row.get(0)?,
+                note:       row.get(1)?,
+            })
+        }).map_err(|e| e.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    }
+
     // ── Catalog files (.svg, .zip, etc. — stored on disk) ────────────────────
 
     pub fn insert_catalog_file(
@@ -1148,6 +1196,14 @@ pub struct AdSpend {
     pub amount:  f64,
 }
 
+/// The seller's private note on a receipt — local-only, never synced to Etsy
+/// (the v3 API has no field for Etsy's own private order notes).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SellerNote {
+    pub receipt_id: String,
+    pub note:       String,
+}
+
 /// Counts of label pool entries by status. Returned by get_label_pool_counts.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LabelPoolCounts {
@@ -1270,6 +1326,18 @@ pub fn set_ad_spend(shop_id: u64, month: String, amount: f64, cache: State<'_, C
 #[tauri::command]
 pub fn list_ad_spend(cache: State<'_, CacheDb>) -> Result<Vec<AdSpend>, String> {
     cache.list_ad_spend()
+}
+
+/// Set or clear (empty note) the seller's private note for a receipt.
+#[tauri::command]
+pub fn set_seller_note(receipt_id: String, note: String, cache: State<'_, CacheDb>) -> Result<(), String> {
+    cache.set_seller_note(&receipt_id, &note)
+}
+
+/// List all seller private notes.
+#[tauri::command]
+pub fn list_seller_notes(cache: State<'_, CacheDb>) -> Result<Vec<SellerNote>, String> {
+    cache.list_seller_notes()
 }
 
 /// Attach a file (.svg, .zip, etc.) to a catalog product.
