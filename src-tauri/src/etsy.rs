@@ -671,6 +671,10 @@ fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<
     (orders, canceled)
 }
 
+/// Fetch receipts from one shop. With `min_last_modified: Some(ts)` this is a
+/// delta fetch — only receipts created/changed since `ts` come back, typically
+/// one page instead of the ~70 a full history crawl takes.
+/// Returns (active normalized orders, cache IDs of canceled receipts).
 async fn fetch_shop_orders(
     client: &Client,
     api_key: &str,
@@ -678,24 +682,16 @@ async fn fetch_shop_orders(
     access_token: &str,
     shop_id: u64,
     unshipped_only: bool,
-) -> Result<Vec<Order>, String> {
+    min_last_modified: Option<i64>,
+) -> Result<(Vec<Order>, Vec<String>), String> {
     const PAGE_SIZE: u32 = 100;
     // Etsy v3 API expects x-api-key in the format "keystring:shared_secret"
     let x_api_key = format!("{}:{}", api_key, shared_secret);
-    // The fulfillment queue only needs unshipped orders, which is a tiny slice of
-    // the full paid history. was_shipped=false trims thousands of completed (incl.
-    // auto-completed digital-download) orders that never need fulfillment.
-    let shipped_filter = if unshipped_only { "&was_shipped=false" } else { "" };
     let mut all_receipts: Vec<Receipt> = Vec::new();
     let mut offset: u32 = 0;
 
     loop {
-        // was_paid=true excludes abandoned carts.
-        // includes=Listings expands each transaction's listing data (gives us image URLs).
-        let url = format!(
-            "{}/application/shops/{}/receipts?limit={}&offset={}&was_paid=true{}&includes=Listings",
-            ETSY_API_BASE, shop_id, PAGE_SIZE, offset, shipped_filter
-        );
+        let url = receipts_url(shop_id, PAGE_SIZE, offset, unshipped_only, min_last_modified);
 
         let resp = client
             .get(&url)
@@ -723,10 +719,7 @@ async fn fetch_shop_orders(
         }
     }
 
-    let mut orders: Vec<Order> = all_receipts.into_iter()
-        .filter(|r| r.status != "Canceled")
-        .map(|r| normalize(r, shop_id))
-        .collect();
+    let (mut orders, canceled_ids) = partition_receipts(all_receipts, shop_id);
 
     // The receipts endpoint doesn't reliably include listing images. Fetch them
     // in one batched listings call and stitch them in. Image URLs survive in the
@@ -754,7 +747,7 @@ async fn fetch_shop_orders(
         }
     }
 
-    Ok(orders)
+    Ok((orders, canceled_ids))
 }
 
 #[derive(Deserialize)]
@@ -963,10 +956,10 @@ async fn fetch_one_shop_open_orders(shop_id: u64, state: &EtsyState, cache: &Cac
         Ok(t) => t,
         Err(e) => { eprintln!("open orders: token error shop {}: {}", shop_id, e); return vec![]; }
     };
-    let orders = match fetch_shop_orders(
-        &state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, true,
+    let (orders, canceled_ids) = match fetch_shop_orders(
+        &state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, true, None,
     ).await {
-        Ok(o) => o,
+        Ok(r) => r,
         Err(e) => { eprintln!("open orders: fetch failed shop {}: {}", shop_id, e); return vec![]; }
     };
     let rows: Vec<(String, u64, String)> = orders
@@ -974,6 +967,7 @@ async fn fetch_one_shop_open_orders(shop_id: u64, state: &EtsyState, cache: &Cac
         .filter_map(|o| serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j)))
         .collect();
     let _ = cache.upsert_orders(&rows);
+    let _ = cache.delete_orders(&canceled_ids);
     orders
 }
 
@@ -998,10 +992,13 @@ pub async fn get_cached_orders(
     Ok(all_orders)
 }
 
-/// Load one shop's orders: serve fresh cache, else fetch from Etsy. On any
-/// credential/token/fetch failure (including a timeout) it returns that shop's
-/// last cached orders instead of erroring — so when run concurrently, one
-/// failing or slow shop can't block or sink the others.
+/// Load one shop's orders: serve fresh cache, else sync from Etsy and serve
+/// the updated cache. After the first full crawl, every sync is a DELTA —
+/// only receipts modified since the last successful sync (new orders plus
+/// status flips) — so refreshes are ~1 request instead of ~70. On any
+/// credential/token/fetch failure (including a timeout) it returns that
+/// shop's last cached orders instead of erroring, and leaves shop_sync
+/// untouched — so one failing or slow shop can't block or sink the others.
 async fn load_one_shop_orders(
     shop_id: u64,
     force: bool,
@@ -1009,6 +1006,10 @@ async fn load_one_shop_orders(
     cache: &CacheDb,
 ) -> Vec<Order> {
     const ORDER_CACHE_MAX_AGE: i64 = 30 * 60; // 30 minutes — conservative; key is shared with another app
+    // Subtracted from the last sync mark when building the delta window, so
+    // clock skew against Etsy and receipts modified mid-fetch are never
+    // missed. Upserts are idempotent, so re-fetching the overlap is harmless.
+    const SYNC_OVERLAP_SECS: i64 = 5 * 60;
 
     let cached = || -> Vec<Order> {
         cache
@@ -1019,18 +1020,21 @@ async fn load_one_shop_orders(
             .collect()
     };
 
+    let last_synced_at = cache.shop_synced_at(shop_id);
+
     // Serve from cache if fresh enough.
     if !force {
-        if let Some(age) = cache.shop_age_secs(shop_id) {
-            if age < ORDER_CACHE_MAX_AGE {
+        if let Some(synced_at) = last_synced_at {
+            if now_unix() - synced_at < ORDER_CACHE_MAX_AGE {
                 return cached();
             }
         }
     }
 
-    // Cache miss or stale — fetch from Etsy using per-shop credentials. Each
-    // shop is a separate Etsy app/key, so concurrent fetches stay within each
-    // shop's own QPS limit (no inter-shop stagger needed).
+    // No shop_sync row (first run, or after clear_shop_orders) → full crawl.
+    // Otherwise → delta from the last successful sync.
+    let min_last_modified = last_synced_at.map(|ts| ts - SYNC_OVERLAP_SECS);
+
     let creds = match resolve_shop_creds(state, shop_id).await {
         Ok(c) => c,
         Err(e) => {
@@ -1045,8 +1049,15 @@ async fn load_one_shop_orders(
             return cached();
         }
     };
-    let orders = match fetch_shop_orders(&state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, false).await {
-        Ok(o) => o,
+
+    // Stamp the sync from BEFORE the fetch: receipts modified mid-fetch fall
+    // after this mark and get picked up by the next delta.
+    let sync_started_at = now_unix();
+
+    let (orders, canceled_ids) = match fetch_shop_orders(
+        &state.client, &creds.api_key, &creds.shared_secret, &token, shop_id, false, min_last_modified,
+    ).await {
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Shop {} order fetch failed ({}); serving cached orders", shop_id, e);
             return cached();
@@ -1058,9 +1069,11 @@ async fn load_one_shop_orders(
         .filter_map(|o| serde_json::to_string(o).ok().map(|j| (o.id.clone(), o.shop_id, j)))
         .collect();
     let _ = cache.upsert_orders(&rows);
-    let _ = cache.mark_shop_synced(shop_id, now_unix());
+    let _ = cache.delete_orders(&canceled_ids);
+    let _ = cache.mark_shop_synced(shop_id, sync_started_at);
 
-    orders
+    // A delta is only a slice of the history; callers expect the complete set.
+    cached()
 }
 
 // ── Active listings fetch ─────────────────────────────────────────────────────
