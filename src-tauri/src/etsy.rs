@@ -293,6 +293,75 @@ fn unix_to_iso_date(ts: i64) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The nth occurrence (1-based) of `weekday` in a given month, e.g. 3rd Monday.
+fn nth_weekday(year: i32, month: u32, weekday: chrono::Weekday, n: u32) -> chrono::NaiveDate {
+    use chrono::{Datelike, NaiveDate};
+    let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let offset = (7 + weekday.num_days_from_monday() - first.weekday().num_days_from_monday()) % 7;
+    first + chrono::Duration::days((offset + (n - 1) * 7) as i64)
+}
+
+/// The last occurrence of `weekday` in a given month (e.g. last Monday of May).
+fn last_weekday(year: i32, month: u32, weekday: chrono::Weekday) -> chrono::NaiveDate {
+    use chrono::{Datelike, Duration, NaiveDate};
+    // Start at the first day of next month, step back to the target weekday.
+    let next_month = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1).unwrap()
+    };
+    let last = next_month - Duration::days(1);
+    let back = (7 + last.weekday().num_days_from_monday() - weekday.num_days_from_monday()) % 7;
+    last - Duration::days(back as i64)
+}
+
+/// US federal holidays for a given year, including the weekday a fixed-date
+/// holiday is *observed* on when it lands on a weekend (Etsy treats observed
+/// holidays as non-shipping days too). Used to mirror Etsy's "ship by" math.
+fn us_federal_holidays(year: i32) -> std::collections::HashSet<chrono::NaiveDate> {
+    use chrono::{Datelike, NaiveDate, Weekday};
+    let mut set = std::collections::HashSet::new();
+
+    // Fixed-date holidays, with Sat→Fri / Sun→Mon observation.
+    for (month, day) in [(1, 1), (6, 19), (7, 4), (11, 11), (12, 25)] {
+        let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        match date.weekday() {
+            Weekday::Sat => { set.insert(date.pred_opt().unwrap()); }
+            Weekday::Sun => { set.insert(date.succ_opt().unwrap()); }
+            _ => {}
+        }
+        set.insert(date);
+    }
+
+    // Floating Monday/Thursday holidays.
+    set.insert(nth_weekday(year, 1, Weekday::Mon, 3));   // MLK Jr. Day
+    set.insert(nth_weekday(year, 2, Weekday::Mon, 3));   // Washington's Birthday
+    set.insert(last_weekday(year, 5, Weekday::Mon));     // Memorial Day
+    set.insert(nth_weekday(year, 9, Weekday::Mon, 1));   // Labor Day
+    set.insert(nth_weekday(year, 10, Weekday::Mon, 2));  // Columbus Day
+    set.insert(nth_weekday(year, 11, Weekday::Thu, 4));  // Thanksgiving
+    set
+}
+
+/// Add `n` business days to `start` (the order date), skipping weekends and US
+/// federal holidays — mirroring how Etsy computes a listing's "ship by" date
+/// from its processing time. Counting begins the day *after* `start`.
+fn add_business_days(start: chrono::NaiveDate, n: u32) -> chrono::NaiveDate {
+    use chrono::{Datelike, Duration, Weekday};
+    let mut holidays = us_federal_holidays(start.year());
+    holidays.extend(us_federal_holidays(start.year() + 1)); // guard year-end crossings
+    let mut date = start;
+    let mut added = 0;
+    while added < n {
+        date += Duration::days(1);
+        let is_weekend = matches!(date.weekday(), Weekday::Sat | Weekday::Sun);
+        if !is_weekend && !holidays.contains(&date) {
+            added += 1;
+        }
+    }
+    date
+}
+
 fn now_unix() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -537,7 +606,9 @@ fn parse_hanging_holes(s: &str) -> Option<u32> {
     s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()
 }
 
-fn normalize(receipt: Receipt, shop_id: u64) -> Order {
+/// Returns (Order, Some(create_timestamp)) when expected_ship_date was absent
+/// so the caller can patch due_date from the listing's processing days.
+fn normalize(receipt: Receipt, shop_id: u64) -> (Order, Option<i64>) {
     let total_price = receipt.grandtotal
         .map(|m| if m.divisor == 0 { 0.0 } else { m.amount as f64 / m.divisor as f64 })
         .unwrap_or(0.0);
@@ -586,11 +657,14 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         .message_from_buyer
         .filter(|s| !s.trim().is_empty());
 
-    // Fall back to create_timestamp + 7 days if Etsy didn't set an expected ship date
+    // When Etsy omits expected_ship_date we use a 7-day placeholder here and
+    // let fetch_shop_orders patch it from the listing's actual processing days.
+    let create_timestamp = receipt.create_timestamp;
+    let needs_processing_fixup = receipt.expected_ship_date.is_none();
     let due_date = receipt
         .expected_ship_date
         .map(unix_to_iso_date)
-        .unwrap_or_else(|| unix_to_iso_date(receipt.create_timestamp + 7 * 86400));
+        .unwrap_or_else(|| unix_to_iso_date(create_timestamp + 7 * 86400));
 
     // "Shipped" = a label has been printed (Etsy's is_shipped flag) OR there's a tracking code on the shipment.
     // Etsy's receipt.status tracks PAYMENT state ("Paid", "Completed", "Canceled"), not shipment state.
@@ -601,7 +675,7 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
     let postage_printed = was_shipped;
     let receipt_id = receipt.receipt_id.to_string();
 
-    Order {
+    let order = Order {
         id: format!("IE-{}", receipt_id),
         receipt_id,
         product_name,
@@ -609,7 +683,7 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         material,
         dimensions,
         due_date,
-        received_date: unix_to_iso_date(receipt.create_timestamp),
+        received_date: unix_to_iso_date(create_timestamp),
         status,
         postage_printed,
         details: OrderDetails { hanging_holes, special_instructions },
@@ -623,7 +697,9 @@ fn normalize(receipt: Receipt, shop_id: u64) -> Order {
         ship_city: receipt.city,
         ship_country: receipt.country_iso,
         listing_id: txn.as_ref().and_then(|t| if t.listing_id == 0 { None } else { Some(t.listing_id) }),
-    }
+    };
+    let fixup_ts = if needs_processing_fixup { Some(create_timestamp) } else { None };
+    (order, fixup_ts)
 }
 
 // ── Order fetch ───────────────────────────────────────────────────────────────
@@ -658,17 +734,24 @@ fn receipts_url(
 /// Split receipts into normalized active orders and the cache IDs of canceled
 /// receipts, so callers can evict the latter (see CacheDb::delete_orders).
 /// The ID format must match normalize(): "IE-{receipt_id}".
-fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<String>) {
+/// Also returns (order_index, listing_id, create_timestamp) for orders whose
+/// due_date needs patching from the listing's actual processing days.
+fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<String>, Vec<(usize, u64, i64)>) {
     let mut orders = Vec::new();
     let mut canceled = Vec::new();
+    let mut fixup: Vec<(usize, u64, i64)> = Vec::new();
     for r in receipts {
         if r.status == "Canceled" {
             canceled.push(format!("IE-{}", r.receipt_id));
         } else {
-            orders.push(normalize(r, shop_id));
+            let (order, fixup_ts) = normalize(r, shop_id);
+            if let (Some(ts), Some(lid)) = (fixup_ts, order.listing_id) {
+                fixup.push((orders.len(), lid, ts));
+            }
+            orders.push(order);
         }
     }
-    (orders, canceled)
+    (orders, canceled, fixup)
 }
 
 /// Fetch receipts from one shop. With `min_last_modified: Some(ts)` this is a
@@ -719,31 +802,43 @@ async fn fetch_shop_orders(
         }
     }
 
-    let (mut orders, canceled_ids) = partition_receipts(all_receipts, shop_id);
+    let (mut orders, canceled_ids, processing_fixup) = partition_receipts(all_receipts, shop_id);
 
-    // The receipts endpoint doesn't reliably include listing images. Fetch them
-    // in one batched listings call and stitch them in. Image URLs survive in the
-    // SQLite order cache so this only runs on a real refresh.
-    let listing_ids: std::collections::HashSet<u64> = orders
+    // One batched listings call covers both image enrichment and processing-days
+    // fixup for orders where Etsy omitted expected_ship_date on the receipt.
+    let image_missing: std::collections::HashSet<u64> = orders
         .iter()
         .filter(|o| o.image_url.is_none())
         .filter_map(|o| o.listing_id)
         .collect();
-    if !listing_ids.is_empty() {
-        let ids: Vec<u64> = listing_ids.into_iter().collect();
-        match fetch_listing_images(client, api_key, shared_secret, access_token, &ids).await {
-            Ok(map) => {
+    let processing_needed: std::collections::HashSet<u64> = processing_fixup
+        .iter()
+        .map(|(_, lid, _)| *lid)
+        .collect();
+    let all_listing_ids: Vec<u64> = image_missing.union(&processing_needed).copied().collect();
+
+    if !all_listing_ids.is_empty() {
+        match fetch_listing_images(client, api_key, shared_secret, access_token, &all_listing_ids).await {
+            Ok((image_map, processing_map)) => {
                 for order in orders.iter_mut() {
                     if order.image_url.is_none() {
                         if let Some(lid) = order.listing_id {
-                            if let Some(url) = map.get(&lid) {
+                            if let Some(url) = image_map.get(&lid) {
                                 order.image_url = Some(url.clone());
                             }
                         }
                     }
                 }
+                for (idx, lid, create_ts) in &processing_fixup {
+                    if let Some(&days) = processing_map.get(lid) {
+                        if let Some(start) = chrono::DateTime::from_timestamp(*create_ts, 0) {
+                            let ship_by = add_business_days(start.date_naive(), days);
+                            orders[*idx].due_date = ship_by.format("%Y-%m-%d").to_string();
+                        }
+                    }
+                }
             }
-            Err(e) => eprintln!("Listing image fetch failed for shop {}: {}", shop_id, e),
+            Err(e) => eprintln!("Listing fetch failed for shop {}: {}", shop_id, e),
         }
     }
 
@@ -760,22 +855,28 @@ struct ListingBatch {
     listing_id: u64,
     #[serde(default)]
     images: Vec<ListingImage>,
+    #[serde(default)]
+    processing_min: Option<u32>,
+    #[serde(default)]
+    processing_max: Option<u32>,
 }
 
-/// Batch-fetch listing images for a set of listing IDs. Returns listing_id → URL.
+/// Batch-fetch listing data for a set of listing IDs.
+/// Returns (listing_id → image URL, listing_id → processing days).
 async fn fetch_listing_images(
     client: &Client,
     api_key: &str,
     shared_secret: &str,
     access_token: &str,
     listing_ids: &[u64],
-) -> Result<std::collections::HashMap<u64, String>, String> {
+) -> Result<(std::collections::HashMap<u64, String>, std::collections::HashMap<u64, u32>), String> {
     use std::collections::HashMap;
     if listing_ids.is_empty() {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), HashMap::new()));
     }
     // Etsy's listings/batch endpoint accepts up to 100 IDs at a time
-    let mut out: HashMap<u64, String> = HashMap::new();
+    let mut images: HashMap<u64, String> = HashMap::new();
+    let mut processing: HashMap<u64, u32> = HashMap::new();
     let x_api_key = format!("{}:{}", api_key, shared_secret);
     for chunk in listing_ids.chunks(100) {
         let ids_param: String = chunk.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
@@ -803,11 +904,14 @@ async fn fetch_listing_images(
                 .next()
                 .and_then(|img| img.url_170x135.or(img.url_75x75).or(img.url_570x_n))
             {
-                out.insert(listing.listing_id, url);
+                images.insert(listing.listing_id, url);
+            }
+            if let Some(days) = listing.processing_max.or(listing.processing_min) {
+                processing.insert(listing.listing_id, days);
             }
         }
     }
-    Ok(out)
+    Ok((images, processing))
 }
 
 // ── Tauri commands ────────────────────────────────────────────────────────────
@@ -1244,7 +1348,7 @@ pub async fn sync_active_listings(
                 match fetch_listing_images(
                     &state.client, &creds.api_key, &creds.shared_secret, &token, &missing_ids,
                 ).await {
-                    Ok(m) => backfill = m,
+                    Ok((image_map, _)) => backfill = image_map,
                     Err(e) => eprintln!(
                         "sync_active_listings: image backfill failed for shop {} ({} missing): {}",
                         shop_id, missing_ids.len(), e
@@ -1646,11 +1750,37 @@ mod tests {
         )
         .unwrap();
 
-        let (orders, canceled) = partition_receipts(receipts, 6807617);
+        let (orders, canceled, _fixup) = partition_receipts(receipts, 6807617);
 
         assert_eq!(orders.len(), 1);
         assert_eq!(orders[0].id, "IE-111");
         assert_eq!(orders[0].shop_id, 6807617);
         assert_eq!(canceled, vec!["IE-222".to_string()]);
+    }
+
+    #[test]
+    fn ship_by_skips_weekends_and_juneteenth() {
+        use chrono::NaiveDate;
+        // Order placed Sun 2026-06-07, 10-business-day processing.
+        // Counting Mon Jun 8 onward, skipping the weekend of Jun 13–14 and
+        // Juneteenth (Fri Jun 19), the 10th business day lands on Mon Jun 22 —
+        // matching what Etsy displays as the "ship by" date.
+        let start = NaiveDate::from_ymd_opt(2026, 6, 7).unwrap();
+        assert_eq!(
+            add_business_days(start, 10),
+            NaiveDate::from_ymd_opt(2026, 6, 22).unwrap()
+        );
+    }
+
+    #[test]
+    fn federal_holidays_resolve_correctly_2026() {
+        use chrono::NaiveDate;
+        let h = us_federal_holidays(2026);
+        assert!(h.contains(&NaiveDate::from_ymd_opt(2026, 6, 19).unwrap()));  // Juneteenth (Fri)
+        assert!(h.contains(&NaiveDate::from_ymd_opt(2026, 1, 19).unwrap()));  // MLK (3rd Mon Jan)
+        assert!(h.contains(&NaiveDate::from_ymd_opt(2026, 5, 25).unwrap()));  // Memorial (last Mon May)
+        assert!(h.contains(&NaiveDate::from_ymd_opt(2026, 11, 26).unwrap())); // Thanksgiving (4th Thu Nov)
+        // July 4 2026 is a Saturday → observed Friday July 3.
+        assert!(h.contains(&NaiveDate::from_ymd_opt(2026, 7, 3).unwrap()));
     }
 }

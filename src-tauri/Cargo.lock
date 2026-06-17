@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "etsy-dashboard"
-version = "0.2.11"
+version = "0.2.16"
 dependencies = [
  "aes-gcm",
  "base64 0.21.7",
