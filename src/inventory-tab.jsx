@@ -120,8 +120,8 @@ function LabelPool({ serverUrl }) {
     const url = printUrl(autoPrint);
     if (!url) return;
     if (isTauri) {
-      const { open: shellOpen } = await import("@tauri-apps/plugin-shell");
-      shellOpen(url).catch(console.error);
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      openUrl(url).catch(console.error);
     } else {
       window.open(url, "_blank", "noopener,noreferrer");
     }

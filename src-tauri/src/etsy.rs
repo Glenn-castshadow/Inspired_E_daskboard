@@ -969,11 +969,11 @@ pub async fn etsy_connect(
         urlencode(&challenge),
     );
 
-    // Tauri v2: open URL via tauri-plugin-shell (replaces v1's tauri::api::shell).
-    use tauri_plugin_shell::ShellExt;
+    // Open the consent URL in the system default browser.
+    use tauri_plugin_opener::OpenerExt;
     app_handle
-        .shell()
-        .open(&auth_url, None)
+        .opener()
+        .open_url(&auth_url, None::<&str>)
         .map_err(|e| format!("Could not open browser: {}", e))?;
 
     let code = wait_for_callback(listener, &state_param).await?;

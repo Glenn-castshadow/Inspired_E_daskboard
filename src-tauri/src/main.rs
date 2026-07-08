@@ -27,7 +27,7 @@ fn close_devtools(window: tauri::WebviewWindow) {
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(usps::UspsState::new())
         .manage(etsy::EtsyState::new())
         // Shared reqwest client — one instance, reused for all HTTP calls.

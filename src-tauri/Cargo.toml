@@ -1,6 +1,6 @@
 [package]
 name = "etsy-dashboard"
-version = "0.2.18"
+version = "0.2.19"
 edition = "2021"
 build = "build.rs"
 
@@ -10,8 +10,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["devtools"] }
 
-# Tauri v2 plugin: open URLs from Rust (used by Etsy OAuth to launch the browser).
-tauri-plugin-shell = "2"
+# Tauri v2 plugin: open URLs in the default browser (Etsy OAuth consent page,
+# label-print page). Replaces the deprecated tauri-plugin-shell open().
+tauri-plugin-opener = "2"
 
 # HTTP client — async, JSON support
 reqwest = { version = "0.11", features = ["json"] }

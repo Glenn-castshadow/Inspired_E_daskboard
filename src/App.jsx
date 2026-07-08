@@ -1,10 +1,15 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from "react";
 import FulfillmentView, { MOCK_ORDERS } from "./fulfillment-view.jsx";
-import EtsyDashboard from "./etsy-dashboard.jsx";
-import MapView from "./map-tab/MapView.jsx";
 import InventoryTab from "./inventory-tab.jsx";
 import LightburnTab from "./lightburn-tab.jsx";
 import CatalogTab from "./catalog-tab.jsx";
+
+// Lazy-loaded: Analytics pulls in recharts (~340 kB) and Map pulls in
+// leaflet + three/globe + html2canvas + the 42k ZIP centroid table (~4 MB
+// minified). Deferring them keeps startup parse work to the core bundle;
+// the chunks load from local disk on first tab visit.
+const EtsyDashboard = lazy(() => import("./etsy-dashboard.jsx"));
+const MapView = lazy(() => import("./map-tab/MapView.jsx"));
 import { applyTheme, getInitialTheme, persistTheme } from "./theme.js";
 import { SHOP_IDS } from "./config.js";
 import { version as APP_VERSION } from "../package.json";
@@ -23,6 +28,19 @@ const TAB_GROUPS = [
     { key: "map",         label: "Map"         },
   ],
 ];
+
+// Brief spinner while a lazy tab chunk loads from disk (first visit only).
+function TabLoading() {
+  return (
+    <div style={{
+      flex: 1, display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "'DM Sans', sans-serif", color: "var(--text-faint)", fontSize: 13, gap: 8,
+    }}>
+      <span style={{ display: "inline-block", animation: "spin 1s linear infinite" }}>↻</span>
+      Loading…
+    </div>
+  );
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("fulfillment");
@@ -382,12 +400,14 @@ export default function App() {
       </div>
 
       {/* Active view */}
-      {activeTab === "fulfillment" && <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}><FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} categoryBlankSizes={categoryBlankSizes} /></div>}
-      {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
-      {activeTab === "inventory"   && <InventoryTab />}
-      {activeTab === "catalog"     && <CatalogTab activeListingSync={listingSync} />}
-      {activeTab === "ingest"      && <LightburnTab orders={orders} />}
-      {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
+      <Suspense fallback={<TabLoading />}>
+        {activeTab === "fulfillment" && <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}><FulfillmentView theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => { loadOpenOrders(); loadOrders(true); }} categoryBlankSizes={categoryBlankSizes} /></div>}
+        {activeTab === "analytics"   && <EtsyDashboard theme={theme} orders={orders} loading={ordersLoading} error={ordersError} lastUpdated={lastUpdated} onRefresh={() => loadOrders(true)} />}
+        {activeTab === "inventory"   && <InventoryTab />}
+        {activeTab === "catalog"     && <CatalogTab activeListingSync={listingSync} />}
+        {activeTab === "ingest"      && <LightburnTab orders={orders} />}
+        {activeTab === "map"         && <MapView orders={orders} loading={ordersLoading} error={ordersError} onRefresh={() => loadOrders(true)} />}
+      </Suspense>
     </div>
   );
 }
