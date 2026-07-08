@@ -260,7 +260,7 @@ pub async fn generate_label_batch(
     settings: State<'_, AppSettings>,
     http: State<'_, reqwest::Client>,
 ) -> Result<Vec<String>, String> {
-    let count = (n.max(1).min(200)) as usize;
+    let count = n.clamp(1, 200) as usize;
     if let Some(base) = settings.server_url() {
         #[derive(serde::Deserialize)] struct Resp { ids: Vec<String> }
         let resp: Resp = http_post(

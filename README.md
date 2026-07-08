@@ -3,13 +3,13 @@
 Internal Tauri desktop app for managing orders across multiple Etsy shops. Replaces manual order tracking with a unified fulfillment queue, analytics dashboard, and customer geography map.
 
 **Platform:** Windows 11 only · Single operator · Not a public app
-**Current version:** v0.2.17
+**Current version:** v0.2.18
 
 ---
 
 ## What it does
 
-Three tabs:
+Six tabs — Fulfillment, Inventory, Listings, Ingest, Analytics, Map:
 
 ### Fulfillment
 - Open orders sorted by due date, color-coded by urgency, with per-shop color stripes and pills.
@@ -19,6 +19,20 @@ Three tabs:
 - **Bulk pick list** — checkbox rows and print a single page with photos, finish, and notes; print CSS hides app chrome so the printout is clean.
 - **Mark as shipped** from the row drawer — tracking code + carrier dropdown; POSTs Etsy's `createReceiptShipment` (which emails the buyer) and invalidates that shop's cache.
 - HTML entity decoding for Etsy product titles (`&quot;` etc.).
+
+### Inventory
+- Physical stock tracking: sheets, blanks, finished pieces, and offcuts with material / size / thickness / quantity and SKU (shared taxonomy in `src/taxonomy.js`).
+- Printable label pool (Rollo rolls or Avery laser sheets) — offcuts get scannable label IDs, which feed the offcut-availability badge on Fulfillment rows.
+- Optionally routes through the LAN `inventory-server/` (Express + SQLite) when a server URL is configured in Settings; falls back to the local cache.db.
+
+### Listings
+- Durable product catalog — seeded from order history and `sync_active_listings`, survives cache clears and delisted products.
+- Links Etsy listings to SKU product families (family badge on Fulfillment rows), flags products with no sales in 90 days.
+- Per-product file attachments (SVG, ZIP, …) stored in the cache DB.
+
+### Ingest
+- LightBurn production-file library (`.lbrn2`) keyed by SKU base, stored in app data.
+- Product → file mappings, plus the "queue cut" widget embedded in Fulfillment row drawers.
 
 ### Analytics
 - 4 stat cards for the **current month**: orders, revenue, avg order value, open orders.
@@ -74,10 +88,15 @@ Three tabs:
 
 ```
 src/
-  App.jsx                       # Tab shell + dark mode toggle (Fulfillment / Analytics / Map)
+  App.jsx                       # Tab shell + dark mode toggle + shared order fetch for all tabs
   theme.js                      # CSS custom property palettes for light/dark
   config.js                     # Shop IDs + per-shop branding (color, name)
+  taxonomy.js                   # SKU grammar — categories, finishes, materials, item types
+  ui.jsx                        # Shared chrome — PageShell, PageHeader, SubTabBar
   fulfillment-view.jsx          # Order queue — filter pills, expandable rows, mark-shipped, pick list
+  inventory-tab.jsx             # Stock (sheets/blanks/finished/offcuts) + label pool printing
+  catalog-tab.jsx               # Listings tab — durable product catalog, listing↔SKU links, files
+  lightburn-tab.jsx             # Ingest tab — LightBurn file library, mappings, cut queue
   etsy-dashboard.jsx            # Analytics — current-month KPIs + recharts panels + history embed
   analytics-history.jsx         # All-time history panel — monthly bars, top buyers/products, weekday donut
   index.css                     # Tailwind base — Map tab and history panel only
@@ -99,7 +118,13 @@ src-tauri/
                                 # createReceiptShipment, encrypted credentials export/import
     usps.rs                     # USPS Tracking 3.2 (OAuth) — replaces easypost.rs
     easypost.rs                 # NOT compiled (preserved for git history)
-    cache.rs                    # SQLite cache layer (orders, tracking, shop sync, clear_shop_orders)
+    cache.rs                    # SQLite cache layer (orders, tracking, catalog, seller notes, files)
+    inventory.rs                # Inventory + label pool commands (local or via inventory-server)
+    catalog.rs                  # Product catalog commands
+    lightburn.rs                # LightBurn file library commands
+    settings.rs                 # App settings (inventory-server URL / API key)
+
+inventory-server/               # Optional LAN Express+SQLite server the Inventory tab can sync to
 ```
 
 ---
@@ -314,6 +339,7 @@ WebView2 user data at `%LOCALAPPDATA%\com.castshadow.etsy-dashboard\EBWebView`.
 
 | Version | Date |
 |---|---|
+| v0.2.18 | 2026-07-08 |
 | v0.2.17 | 2026-06-17 |
 | v0.2.16 | 2026-06-17 |
 | v0.2.15 | 2026-06-17 |

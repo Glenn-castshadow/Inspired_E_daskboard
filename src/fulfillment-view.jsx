@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
-import { SHOP_META } from "./config";
+import { SHOP_IDS, SHOP_META } from "./config";
 import { categoryLabel } from "./taxonomy.js";
 import { QueueCutWidget } from "./lightburn-tab.jsx";
 import { PageHeader, PageShell, ghostButtonStyle } from "./ui.jsx";
@@ -148,10 +148,12 @@ const parseDue = (str) => {
   return new Date(y, m - 1, d);
 };
 
-const today = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+// Recomputed on every call — the app stays open for days, so a module-level
+// snapshot would leave the due/overdue day math stale after midnight.
+const todayMidnight = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; };
 
 const daysUntil = (dateStr) =>
-  Math.round((parseDue(dateStr) - today) / 86400000);
+  Math.round((parseDue(dateStr) - todayMidnight()) / 86400000);
 
 const dueBadge = (dateStr, status, isDark = false) => {
   // In dark mode every badge inverts to solid color + white text so it pops on the dark canvas.
@@ -1096,7 +1098,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
         {!loading && error && orders.length === 0 && (
           <div style={{ textAlign: "center", padding: "48px 0", fontFamily: "'DM Sans', sans-serif", fontSize: 14, color: "#c0392b" }}>
             <div style={{ marginBottom: 12 }}>{error}</div>
-            <button onClick={() => loadOrders()} style={{
+            <button onClick={() => onRefresh()} style={{
               fontFamily: "'DM Sans', sans-serif", fontSize: 12,
               color: "#888", background: "#fff", border: "1px solid #ddd",
               borderRadius: 6, padding: "6px 14px", cursor: "pointer",
@@ -1129,7 +1131,7 @@ export default function FulfillmentView({ theme = "light", orders = [], loading 
             isDark={isDark}
             selected={selectedIds.has(order.id)}
             onSelect={toggleSelected}
-            onShipped={() => loadOrders(true)}
+            onShipped={onRefresh}
             sellerNote={sellerNotes[order.receipt_id] || ""}
             onSaveNote={saveSellerNote}
           />

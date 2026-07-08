@@ -197,8 +197,13 @@ async fn get_valid_token(state: &UspsState) -> Result<String, String> {
 
 #[derive(Deserialize)]
 struct UspsTrackingResponse {
+    // Never read — the caller already knows the tracking number. Kept to
+    // document the (still unverified) response shape for the eventual
+    // end-to-end test against real USPS credentials.
+    #[allow(dead_code)]
     #[serde(default)]
     tracking_number: Option<String>,
+    #[allow(dead_code)]
     #[serde(default, alias = "trackingNumber")]
     tracking_number_camel: Option<String>,
     #[serde(default)]

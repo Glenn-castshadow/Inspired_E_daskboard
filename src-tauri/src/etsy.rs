@@ -731,15 +731,17 @@ fn receipts_url(
     url
 }
 
+/// (order_index, listing_id, create_timestamp) for an order whose due_date
+/// needs patching from the listing's actual processing days.
+type ProcessingFixup = (usize, u64, i64);
+
 /// Split receipts into normalized active orders and the cache IDs of canceled
 /// receipts, so callers can evict the latter (see CacheDb::delete_orders).
 /// The ID format must match normalize(): "IE-{receipt_id}".
-/// Also returns (order_index, listing_id, create_timestamp) for orders whose
-/// due_date needs patching from the listing's actual processing days.
-fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<String>, Vec<(usize, u64, i64)>) {
+fn partition_receipts(receipts: Vec<Receipt>, shop_id: u64) -> (Vec<Order>, Vec<String>, Vec<ProcessingFixup>) {
     let mut orders = Vec::new();
     let mut canceled = Vec::new();
-    let mut fixup: Vec<(usize, u64, i64)> = Vec::new();
+    let mut fixup: Vec<ProcessingFixup> = Vec::new();
     for r in receipts {
         if r.status == "Canceled" {
             canceled.push(format!("IE-{}", r.receipt_id));
@@ -1286,7 +1288,7 @@ pub async fn sync_active_listings(
                     done: true,
                     synced_count: 0,
                     total_count: None,
-                    message: format!("Reconnect this Etsy shop to grant listing access"),
+                    message: "Reconnect this Etsy shop to grant listing access".to_string(),
                 });
                 continue;
             }
